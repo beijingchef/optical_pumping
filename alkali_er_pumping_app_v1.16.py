@@ -535,6 +535,17 @@ def transition_choice_labels(atom, line, n2_pressure_torr, n2_coeffs, allowed_on
     ]
 
 
+def default_transition_label(atom, line, n2_pressure_torr, n2_coeffs, Fg_target, Fe_target, allowed_only=True):
+    """Return the UI label for a requested hyperfine reference transition."""
+    choices = hyperfine_transition_choices(
+        atom, line, n2_pressure_torr, n2_coeffs, allowed_only=allowed_only
+    )
+    for row in choices:
+        if abs(float(row["Fg"]) - float(Fg_target)) < 1e-9 and abs(float(row["Fe"]) - float(Fe_target)) < 1e-9:
+            return row["label"]
+    return choices[0]["label"] if choices else None
+
+
 def absolute_detuning_from_transition_choice(
     atom,
     line,
@@ -1021,8 +1032,6 @@ def render_transition_table_html(df):
         ("pump_3_frequency", "ν<sub>pump,3</sub>", "THz", "9f"),
         ("lorentz_FWHM_total", "Lorentz FWHM total", "MHz", "1f"),
         ("doppler_FWHM", "Doppler FWHM", "MHz", "1f"),
-        ("beta_width", "β<sub>width</sub>", "MHz/Torr", "1f"),
-        ("beta_shift", "β<sub>shift</sub>", "MHz/Torr", "1f"),
     ]
 
     def fmt_value(value, kind):
@@ -1285,7 +1294,7 @@ with st.sidebar:
     show_allowed_only = st.session_state["show_allowed_only"]
     show_rate_matrices = st.session_state["show_rate_matrices"]
 
-    def beam_config_ui(beam_number, default_line_index=0):
+    def beam_config_ui(beam_number, default_line_index=0, default_Fg=None, default_Fe=None, default_rate=10.0):
         st.header(f"Beam {beam_number}")
         line = st.selectbox("Line", ["D1", "D2"], index=default_line_index, key=f"line{beam_number}")
 
@@ -1294,7 +1303,12 @@ with st.sidebar:
         )
         transition_key = f"transition{beam_number}"
         if transition_options and st.session_state.get(transition_key) not in transition_options:
-            st.session_state[transition_key] = transition_options[0]
+            preferred_transition = None
+            if default_Fg is not None and default_Fe is not None:
+                preferred_transition = default_transition_label(
+                    atom, line, n2_pressure_torr, n2_coeffs, default_Fg, default_Fe, allowed_only=show_allowed_only
+                )
+            st.session_state[transition_key] = preferred_transition if preferred_transition in transition_options else transition_options[0]
         transition = st.selectbox(
             "Reference hyperfine transition",
             transition_options,
@@ -1309,7 +1323,7 @@ with st.sidebar:
         )
         rate = st.number_input(
             "Rₚᵤₘₚ: pumping rate for selected transition (s⁻¹)",
-            value=10.0,
+            value=float(default_rate),
             min_value=0.0,
             step=10.0,
             key=f"rate{beam_number}",
@@ -1333,11 +1347,11 @@ with st.sidebar:
 
     bcol1, bcol2, bcol3 = st.columns(3, gap="small")
     with bcol1:
-        line1, transition1, det_rel1, rate1, k1, pol1 = beam_config_ui(1)
+        line1, transition1, det_rel1, rate1, k1, pol1 = beam_config_ui(1, default_Fg=1, default_Fe=2)
     with bcol2:
-        line2, transition2, det_rel2, rate2, k2, pol2 = beam_config_ui(2)
+        line2, transition2, det_rel2, rate2, k2, pol2 = beam_config_ui(2, default_Fg=2, default_Fe=2)
     with bcol3:
-        line3, transition3, det_rel3, rate3, k3, pol3 = beam_config_ui(3)
+        line3, transition3, det_rel3, rate3, k3, pol3 = beam_config_ui(3, default_Fg=2, default_Fe=2, default_rate=0.0)
 
     st.divider()
     st.header("Display")
