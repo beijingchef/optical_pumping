@@ -434,20 +434,6 @@ def hyperfine_transition_table(
         total_lorentz = atom[line]["gamma_nat_MHz"] + pressure_width
         doppler = doppler_fwhm_MHz(atom, line, st.session_state.get("temperature_C_for_table", 25.0))
 
-        pump1_abs_MHz = np.nan
-        pump2_abs_MHz = np.nan
-        pump3_abs_MHz = np.nan
-        for beam in pump_beams:
-            if beam.get("line") != line:
-                continue
-            pump_abs_MHz = line_center_MHz + float(beam.get("detuning", 0.0))
-            if beam.get("name") == "Beam 1":
-                pump1_abs_MHz = pump_abs_MHz
-            elif beam.get("name") == "Beam 2":
-                pump2_abs_MHz = pump_abs_MHz
-            elif beam.get("name") == "Beam 3":
-                pump3_abs_MHz = pump_abs_MHz
-
         for g in ground_Fs:
             Fg = g["F"]
             Eg = g["E"]
@@ -460,6 +446,29 @@ def hyperfine_transition_table(
                 det0 = Ee - Eg
                 detP = det0 + pressure_shift
                 transition_abs_MHz = line_center_MHz + detP
+
+                pump1_abs_MHz = np.nan
+                pump2_abs_MHz = np.nan
+                pump3_abs_MHz = np.nan
+                for beam in pump_beams:
+                    if beam.get("line") != line:
+                        continue
+                    selected = beam.get("selected_transition") or {}
+                    try:
+                        selected_Fg = float(selected.get("Fg"))
+                        selected_Fe = float(selected.get("Fe"))
+                    except (TypeError, ValueError):
+                        continue
+                    if abs(selected_Fg - float(Fg)) > 1e-9 or abs(selected_Fe - float(Fe)) > 1e-9:
+                        continue
+
+                    pump_abs_MHz = line_center_MHz + float(beam.get("detuning", 0.0))
+                    if beam.get("name") == "Beam 1":
+                        pump1_abs_MHz = pump_abs_MHz
+                    elif beam.get("name") == "Beam 2":
+                        pump2_abs_MHz = pump_abs_MHz
+                    elif beam.get("name") == "Beam 3":
+                        pump3_abs_MHz = pump_abs_MHz
 
                 rows.append({
                     "Line": line,
