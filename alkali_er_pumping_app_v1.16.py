@@ -408,7 +408,7 @@ def hyperfine_transition_table(
     The pressure-shifted detuning is:
         delta_with_N2 = delta_hfs + beta_N2 P_N2.
 
-    Absolute optical frequencies are shown in THz.
+    Absolute optical frequencies are shown in MHz.
     """
     rows = []
     pump_beams = pump_beams or []
@@ -434,19 +434,19 @@ def hyperfine_transition_table(
         total_lorentz = atom[line]["gamma_nat_MHz"] + pressure_width
         doppler = doppler_fwhm_MHz(atom, line, st.session_state.get("temperature_C_for_table", 25.0))
 
-        pump1_abs_THz = np.nan
-        pump2_abs_THz = np.nan
-        pump3_abs_THz = np.nan
+        pump1_abs_MHz = np.nan
+        pump2_abs_MHz = np.nan
+        pump3_abs_MHz = np.nan
         for beam in pump_beams:
             if beam.get("line") != line:
                 continue
-            pump_abs_THz = MHz_to_THz(line_center_MHz + float(beam.get("detuning", 0.0)))
+            pump_abs_MHz = line_center_MHz + float(beam.get("detuning", 0.0))
             if beam.get("name") == "Beam 1":
-                pump1_abs_THz = pump_abs_THz
+                pump1_abs_MHz = pump_abs_MHz
             elif beam.get("name") == "Beam 2":
-                pump2_abs_THz = pump_abs_THz
+                pump2_abs_MHz = pump_abs_MHz
             elif beam.get("name") == "Beam 3":
-                pump3_abs_THz = pump_abs_THz
+                pump3_abs_MHz = pump_abs_MHz
 
         for g in ground_Fs:
             Fg = g["F"]
@@ -465,14 +465,14 @@ def hyperfine_transition_table(
                     "Line": line,
                     "Fg": f"{Fg:g}",
                     "F'": f"{Fe:g}",
-                    "nu_D_absolute": MHz_to_THz(line_center_MHz),
+                    "nu_D_absolute": line_center_MHz,
                     "detuning_zero_pressure": det0,
                     "N2_shift": pressure_shift,
                     "detuning_with_N2": detP,
-                    "transition_frequency_with_N2": MHz_to_THz(transition_abs_MHz),
-                    "pump_1_frequency": pump1_abs_THz,
-                    "pump_2_frequency": pump2_abs_THz,
-                    "pump_3_frequency": pump3_abs_THz,
+                    "transition_frequency_with_N2": transition_abs_MHz,
+                    "pump_1_frequency": pump1_abs_MHz,
+                    "pump_2_frequency": pump2_abs_MHz,
+                    "pump_3_frequency": pump3_abs_MHz,
                     "lorentz_FWHM_total": total_lorentz,
                     "doppler_FWHM": doppler,
                     "beta_width": n2_coeffs[line]["width"],
@@ -1022,14 +1022,14 @@ def render_transition_table_html(df):
         ("Line", "Line", None, "text"),
         ("Fg", "F<sub>g</sub>", None, "text"),
         ("F'", "F′", None, "text"),
-        ("nu_D_absolute", "ν<sub>D</sub> absolute", "THz", "9f"),
-        ("detuning_zero_pressure", "ν(F→F′) − ν<sub>D</sub>, P=0", "MHz", "1f"),
+        ("nu_D_absolute", "ν<sub>D</sub> absolute", "MHz", "1f"),
+        ("detuning_zero_pressure", "ν<sub>FF′</sub> − ν<sub>D</sub>, P=0", "MHz", "1f"),
         ("N2_shift", "N<sub>2</sub> shift βP", "MHz", "1f"),
-        ("detuning_with_N2", "ν(F→F′) − ν<sub>D</sub>, with N<sub>2</sub>", "MHz", "1f"),
-        ("transition_frequency_with_N2", "ν(F→F′), with N<sub>2</sub>", "THz", "9f"),
-        ("pump_1_frequency", "ν<sub>pump,1</sub>", "THz", "9f"),
-        ("pump_2_frequency", "ν<sub>pump,2</sub>", "THz", "9f"),
-        ("pump_3_frequency", "ν<sub>pump,3</sub>", "THz", "9f"),
+        ("detuning_with_N2", "ν<sub>FF′</sub> − ν<sub>D</sub>, with N<sub>2</sub>", "MHz", "1f"),
+        ("transition_frequency_with_N2", "ν<sub>FF′</sub>, with N<sub>2</sub>", "MHz", "1f"),
+        ("pump_1_frequency", "ν<sub>pump1</sub>", "MHz", "1f"),
+        ("pump_2_frequency", "ν<sub>pump2</sub>", "MHz", "1f"),
+        ("pump_3_frequency", "ν<sub>pump3</sub>", "MHz", "1f"),
         ("lorentz_FWHM_total", "Lorentz FWHM total", "MHz", "1f"),
         ("doppler_FWHM", "Doppler FWHM", "MHz", "1f"),
     ]
@@ -1185,7 +1185,7 @@ with st.sidebar:
             file_name=f"alkali_er_condition_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json",
             key="save_condition_button",
-            use_container_width=True,
+            width="stretch",
         )
 
     if uploaded_condition is not None:
@@ -1254,37 +1254,33 @@ with st.sidebar:
         c1, c2 = st.columns(2, gap="small")
         with c1:
             D1_width = st.number_input(
-                "D1 width",
-                value=float(DEFAULT_N2_COEFFS[atom_name]["D1"]["width"]),
+                "D1 broadening",
                 step=0.1,
                 key="D1_width",
-                help="N2 pressure broadening coefficient, FWHM, MHz/Torr",
+                help="N2 pressure-broadening coefficient, MHz/Torr",
             )
             D2_width = st.number_input(
-                "D2 width",
-                value=float(DEFAULT_N2_COEFFS[atom_name]["D2"]["width"]),
+                "D2 broadening",
                 step=0.1,
                 key="D2_width",
-                help="N2 pressure broadening coefficient, FWHM, MHz/Torr",
+                help="N2 pressure-broadening coefficient, MHz/Torr",
             )
 
         with c2:
             D1_shift = st.number_input(
                 "D1 shift",
-                value=float(DEFAULT_N2_COEFFS[atom_name]["D1"]["shift"]),
                 step=0.1,
                 key="D1_shift",
                 help="N2 pressure shift coefficient, MHz/Torr",
             )
             D2_shift = st.number_input(
                 "D2 shift",
-                value=float(DEFAULT_N2_COEFFS[atom_name]["D2"]["shift"]),
                 step=0.1,
                 key="D2_shift",
                 help="N2 pressure shift coefficient, MHz/Torr",
             )
 
-        st.caption("Widths and shifts are in MHz/Torr. Negative shift = red shift.")
+        st.caption("Broadening and shifts are in MHz/Torr. Negative shift = red shift.")
 
     n2_coeffs = {
         "D1": {"width": D1_width, "shift": D1_shift},
@@ -1322,7 +1318,7 @@ with st.sidebar:
             key=f"det_rel{beam_number}",
         )
         rate = st.number_input(
-            "Rₚᵤₘₚ: pumping rate for selected transition (s⁻¹)",
+            "Pumping rate for selected transition (s⁻¹)",
             value=float(default_rate),
             min_value=0.0,
             step=10.0,
@@ -1357,12 +1353,10 @@ with st.sidebar:
     st.header("Display")
     show_allowed_only = st.checkbox(
         "Only show allowed hyperfine transitions",
-        value=True,
         key="show_allowed_only",
     )
     show_rate_matrices = st.checkbox(
         "Show rate matrices",
-        value=False,
         key="show_rate_matrices",
     )
 
@@ -1527,7 +1521,7 @@ with left:
     ax.set_xlabel(rf"$|F,m\rangle$ along {q_axis}")
     ax.tick_params(axis="x", rotation=60)
     fig.tight_layout()
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
 
 with right:
     # Give the Zeeman table more width so the final light-shift column is visible.
@@ -1544,7 +1538,7 @@ with right:
                 "νLS (Hz)": "{:.1f}",
                 "νₘ − νₘ₋₁ (Hz)": "{:.1f}",
             }, na_rep=""),
-            use_container_width=True,
+            width="stretch",
             height=315,
         )
         if light_shift_available:
@@ -1559,7 +1553,7 @@ with right:
                 "F": "{:g}",
                 "population": "{:.6f}",
             }),
-            use_container_width=True,
+            width="stretch",
             height=100,
         )
 
@@ -1573,7 +1567,7 @@ with right:
 st.subheader("D1/D2 hyperfine transition detunings")
 st.caption(
     "Detunings are relative to the corresponding zero-pressure D1 or D2 fine-structure line center. "
-    "Absolute optical frequencies are shown in THz. Blank pump-frequency cells mean that pump beam is on the other D line."
+    "Absolute optical frequencies are shown in MHz. Blank pump-frequency cells mean that pump beam is on the other D line."
 )
 
 st.markdown(
@@ -1585,12 +1579,12 @@ if show_rate_matrices:
     with st.expander("Total rate matrix L", expanded=False):
         st.write("Columns are source states; rows are destination states. dp/dt = L p.")
         Ldf = pd.DataFrame(L_total, index=labels, columns=labels)
-        st.dataframe(Ldf.style.format("{:.3e}"), use_container_width=True)
+        st.dataframe(Ldf.style.format("{:.3e}"), width="stretch")
 
     with st.expander("ER redistribution matrix M_ER", expanded=False):
         st.write("After one ER collision: p → M_ER p.")
         Mdf = pd.DataFrame(M_ER, index=labels, columns=labels)
-        st.dataframe(Mdf.style.format("{:.4f}"), use_container_width=True)
+        st.dataframe(Mdf.style.format("{:.4f}"), width="stretch")
 
 with st.expander("Beam diagnostics", expanded=False):
     if len(diagnostics) == 0:
@@ -1612,7 +1606,7 @@ with st.expander("Beam diagnostics", expanded=False):
             st.write(f"Spherical weights relative to quantization axis {q_axis}: {qtxt}")
             st.write(
                 f"Natural FWHM = {info['gamma_nat_MHz']:.3f} MHz; "
-                f"N2 FWHM = {info['pressure_width_MHz']:.3f} MHz; "
+                f"N2 broadening = {info['pressure_width_MHz']:.3f} MHz; "
                 f"total Lorentz FWHM = {info['lorentz_fwhm_MHz']:.3f} MHz"
             )
             st.write(
