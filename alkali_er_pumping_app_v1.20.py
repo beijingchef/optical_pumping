@@ -1274,6 +1274,7 @@ with st.sidebar:
             "N₂ pressure (Torr)",
             min_value=0.0,
             step=10.0,
+            format="%.1f",
             key="n2_pressure_torr",
         )
 
@@ -1293,6 +1294,7 @@ with st.sidebar:
         temperature_C = st.number_input(
             "Temperature (°C)",
             step=1.0,
+            format="%.1f",
             key="temperature_C_for_table",
         )
     with cell_row_col2:
@@ -1300,6 +1302,7 @@ with st.sidebar:
             "ER rate ΓER (s⁻¹)",
             min_value=0.0,
             step=1.0,
+            format="%.1f",
             key="gamma_ER",
         )
     with cell_row_col3:
@@ -1381,12 +1384,14 @@ with st.sidebar:
         det_rel = st.number_input(
             "Detuning from selected transition (MHz)",
             step=10.0,
+            format="%g",
             key=det_rel_key,
         )
         rate = st.number_input(
             "Pumping rate for selected transition (s⁻¹)",
             min_value=0.0,
             step=10.0,
+            format="%.1f",
             key=rate_key,
         )
         k_axis = st.selectbox(
