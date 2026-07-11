@@ -1,4 +1,4 @@
-# alkali_pumping_v2.32.py
+# alkali_pumping_v2.35.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -8,7 +8,7 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v2.32.py
+#   streamlit run alkali_pumping_v2.35.py
 #
 # Model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + Gamma_ER (M_ER - I)] p
@@ -24,7 +24,6 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 import matplotlib.pyplot as plt
 
 from math import sqrt, pi
@@ -739,6 +738,42 @@ CONDITION_KEYS = (
     "line3", "transition3", "det_rel3", "rate3", "k3", "pol3",
     "show_allowed_only", "show_rate_matrices",
 )
+
+
+# Built-in startup condition, taken from ps400(1).json.
+DEFAULT_STARTUP_CONDITION = {
+    "condition_name": "ps400",
+    "atom_name": "Rb87",
+    "gamma_ER": 2.0,
+    "q_axis": "z",
+    "temperature_C_for_table": 23.0,
+    "n2_pressure_torr": 0.0,
+    "include_spin_exchange": True,
+    "D1_width": 17.8,
+    "D2_width": 18.1,
+    "D1_shift": -8.25,
+    "D2_shift": -5.9,
+    "line1": "D1",
+    "transition1": "D1 F=1 → F'=2",
+    "det_rel1": 0.0,
+    "rate1": 1200.0,
+    "k1": "x",
+    "pol1": "linear z",
+    "line2": "D1",
+    "transition2": "D1 F=2 → F'=2",
+    "det_rel2": 400.0,
+    "rate2": 400.0,
+    "k2": "x",
+    "pol2": "linear z",
+    "line3": "D1",
+    "transition3": "D1 F=2 → F'=2",
+    "det_rel3": 0.0,
+    "rate3": 0.0,
+    "k3": "x",
+    "pol3": "linear z",
+    "show_allowed_only": True,
+    "show_rate_matrices": False,
+}
 
 
 def clean_condition_name(value):
@@ -1848,19 +1883,19 @@ def current_browser_title():
     return f"{APP_BASE_TITLE}: {name}"
 
 
-def set_browser_tab_title():
-    """Set the real browser-tab title after Streamlit has rendered the page."""
-    title_js = json.dumps(current_browser_title())
-    components.html(
-        f"<script>window.parent.document.title = {title_js};</script>",
-        height=0,
-        width=0,
-    )
-
-
 # ============================================================
 # 9. Streamlit UI
 # ============================================================
+
+# Initialize every condition field before page configuration and widget creation.
+# Later JSON loads still overwrite these values through apply_loaded_condition_dict().
+for _key, _value in DEFAULT_STARTUP_CONDITION.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _value
+st.session_state.setdefault(
+    "_last_atom_name_for_defaults",
+    DEFAULT_STARTUP_CONDITION["atom_name"],
+)
 
 st.set_page_config(
     page_title=current_browser_title(),
@@ -1869,7 +1904,6 @@ st.set_page_config(
 )
 
 st.title("Alkali steady-state populations: three pumps + N₂ + ER + SE")
-set_browser_tab_title()
 
 # ============================================================
 # Sidebar: all input condition values
@@ -2434,15 +2468,25 @@ with right:
     else:
         st.caption("νLS is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
     st.caption(
-        "Dₘ = Pₘ - Pₘ₋₁ is the population difference between adjacent Zeeman sublevels within the same F manifold.  \n"
-        "Γ^{ER}_{m} is the signed net fractional ER rate evaluated at the steady state; positive means  population loss and negative means population replenishment.  \n" 
-        "Γ^{SE}_{m} is the signed net fractional SE rate at the final steady state  \n"
-        "Aₘ is the optical repopulation rate into |F,m⟩ divided by its steady-state population: Aₘ = [Σₙ Wₘ←ₙ Pₙ]/Pₘ.  \n"
-        "Δν = νLS,m − νLS,m−1 is the adjacent-sublevel light-shift difference.  \n"
-        "Rₘ is the total optical excitation/depopulation rate of |F,m⟩, summed over excited states and all active pump beams.  \n"
-        "Γ^R = (Rₘ + Rₘ₋₁)/2 in s⁻¹, and Γ^R/2π reports the same relaxation rate in Hz.  \n"
-        "Γ^{ER}_{m,m-1} is the self-decay coefficient of an infinitesimal adjacent coherence perturbation under the ER channel.  \n"
-        "Γ^{SE}_{m,m-1} is the corresponding local adjacent-coherence self-decay coefficient under the steady-state mean-field SE channel."
+        "Dₘ = Pₘ − Pₘ₋₁ is the population difference between adjacent Zeeman "
+        "sublevels within the same F manifold. Aₘ is the optical repopulation "
+        "rate into |F,m⟩ divided by its steady-state population: "
+        "Aₘ = [Σₙ Wₘ←ₙ Pₙ]/Pₘ. Δν = νLS,m − νLS,m−1 is the adjacent-sublevel "
+        "light-shift frequency difference. These adjacent-state quantities are "
+        "blank for the lowest-m state of each F manifold."
+    )
+    st.caption(
+        "Rₘ is the total optical excitation/depopulation rate of |F,m⟩, "
+        "summed over excited states and all active pump beams. Γ^R reports "
+        "(Rₘ + Rₘ₋₁)/2 in s⁻¹, and Γ^R/2π reports the same relaxation rate "
+        "in Hz. Γ^{ER}_{m} is "
+        "the signed net fractional ER rate evaluated at the final steady state; "
+        "positive means ER removes population and negative means ER replenishes it. "
+        "Γ^{ER}_{m,m-1} is the self-decay coefficient of an infinitesimal adjacent "
+        "coherence perturbation under the ER channel. Γ^{SE}_{m} is the signed "
+        "net fractional spin-exchange rate at the final steady state, and "
+        "Γ^{SE}_{m,m-1} is the corresponding local adjacent-coherence self-decay "
+        "coefficient under the steady-state mean-field SE channel."
     )
 
     summary_sum_p = p_ss.sum()
