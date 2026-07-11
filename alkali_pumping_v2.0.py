@@ -1,4 +1,4 @@
-# alkali_er_pumping_app.py
+# alkali_pumping_v2.32.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -8,7 +8,7 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_er_pumping_app.py
+#   streamlit run alkali_pumping_v2.32.py
 #
 # Model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + Gamma_ER (M_ER - I)] p
@@ -24,6 +24,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import matplotlib.pyplot as plt
 
 from math import sqrt, pi
@@ -135,8 +136,8 @@ DEFAULT_N2_COEFFS = {
 #
 # The vapor pressure model below is the common older Steck/Nesmeyanov-style
 # two-parameter form log10(P_Torr)=A-B/T_K. It is intended as a practical
-# rate estimate for this population app; use the scale factor in the sidebar
-# if you want to match a measured density or a different pressure convention.
+# rate estimate for this population app. Edit the built-in vapor-pressure or
+# cross-section data if you need a different density or collision convention.
 
 VAPOR_PRESSURE_MODELS = {
     "Rb87": {
@@ -727,41 +728,97 @@ def absolute_detuning_from_transition_choice(
     return float(selected["detP"] + relative_detuning_MHz), selected
 
 
-def make_current_condition_dict():
-    """Collect all user-facing simulation conditions from st.session_state."""
-    keys = [
-        "atom_name", "gamma_ER", "q_axis", "temperature_C_for_table", "n2_pressure_torr",
-        "include_spin_exchange",
-        "D1_width", "D2_width", "D1_shift", "D2_shift",
-        "line1", "transition1", "det_rel1", "rate1", "k1", "pol1",
-        "line2", "transition2", "det_rel2", "rate2", "k2", "pol2",
-        "line3", "transition3", "det_rel3", "rate3", "k3", "pol3",
-        "show_allowed_only", "show_rate_matrices",
-    ]
+CONDITION_SCHEMA_VERSION = "2.23"
+CONDITION_KEYS = (
+    "condition_name",
+    "atom_name", "gamma_ER", "q_axis", "temperature_C_for_table", "n2_pressure_torr",
+    "include_spin_exchange",
+    "D1_width", "D2_width", "D1_shift", "D2_shift",
+    "line1", "transition1", "det_rel1", "rate1", "k1", "pol1",
+    "line2", "transition2", "det_rel2", "rate2", "k2", "pol2",
+    "line3", "transition3", "det_rel3", "rate3", "k3", "pol3",
+    "show_allowed_only", "show_rate_matrices",
+)
+
+
+def clean_condition_name(value):
+    """Return a nonempty condition name without a .json extension."""
+    name = str(value or "").strip()
+    if name.lower().endswith(".json"):
+        name = name[:-5].rstrip()
+    return name or "default"
+
+
+def build_condition_payload(values):
+    """Build the strict v2.23 JSON payload from current condition values."""
+    conditions = {key: values.get(key) for key in CONDITION_KEYS}
+    conditions["condition_name"] = clean_condition_name(
+        conditions.get("condition_name")
+    )
     return {
-        "app": "alkali_er_pumping_app",
-        "version": 2,
+        "app": "alkali_pumping",
+        "format": "alkali_pumping_conditions",
+        "version": CONDITION_SCHEMA_VERSION,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
-        "conditions": {k: st.session_state.get(k) for k in keys},
+        "conditions": conditions,
     }
 
 
+def current_condition_values(condition_name=None):
+    """Collect all current sidebar conditions, including condition name."""
+    values = {key: st.session_state.get(key) for key in CONDITION_KEYS}
+    if condition_name is not None:
+        values["condition_name"] = condition_name
+    return values
+
+
 def apply_loaded_condition_dict(payload):
-    """Load a saved condition dictionary into st.session_state."""
+    """Apply a strict alkali_pumping v2.23 condition file to session state."""
     if not isinstance(payload, dict):
-        raise ValueError("The uploaded file is not a JSON object.")
+        raise ValueError("The loaded file is not a JSON object.")
+    if payload.get("app") != "alkali_pumping":
+        raise ValueError("This is not an alkali_pumping condition file.")
+    if payload.get("format") != "alkali_pumping_conditions":
+        raise ValueError("The JSON file does not use the v2.23 condition format.")
 
-    conditions = payload.get("conditions", payload)
+    conditions = payload.get("conditions")
     if not isinstance(conditions, dict):
-        raise ValueError("The uploaded JSON does not contain a valid conditions object.")
+        raise ValueError("The JSON file does not contain a conditions object.")
 
-    for key, value in conditions.items():
+    missing = [key for key in CONDITION_KEYS if key not in conditions]
+    if missing:
+        raise ValueError(
+            "The condition file is missing required fields: " + ", ".join(missing)
+        )
+
+    loaded_name = clean_condition_name(conditions["condition_name"])
+    for key in CONDITION_KEYS:
+        value = conditions[key]
         if value is not None:
             st.session_state[key] = value
 
     # Prevent atom-change default logic from overwriting loaded N2 coefficients.
-    if conditions.get("atom_name") is not None:
-        st.session_state["_last_atom_name_for_defaults"] = conditions["atom_name"]
+    st.session_state["_last_atom_name_for_defaults"] = conditions["atom_name"]
+    return loaded_name
+
+
+def load_condition_callback():
+    """Load a selected JSON in a callback, before keyed widgets are instantiated."""
+    uploaded = st.session_state.get("condition_file_uploader")
+    if uploaded is None:
+        return
+
+    try:
+        payload = json.loads(uploaded.getvalue().decode("utf-8"))
+        loaded_name = apply_loaded_condition_dict(payload)
+        st.session_state["_condition_load_message"] = (
+            f"Loaded condition: {loaded_name}"
+        )
+        st.session_state.pop("_condition_load_error", None)
+    except Exception as exc:
+        st.session_state["_condition_load_error"] = str(exc)
+        st.session_state.pop("_condition_load_message", None)
+
 
 def excited_decay_branching(atom, line, ground_states, e_state):
     """
@@ -1079,6 +1136,90 @@ def build_ER_matrix(atom, ground_states):
     return M
 
 
+def coupled_basis_amplitudes(atom, ground_states):
+    """Return real amplitudes <I mI, S mS | F m> for all ground states."""
+    I = atom["I"]
+    mI_list = m_values(I)
+    mS_list = [-0.5, +0.5]
+    amplitudes = np.zeros(
+        (len(ground_states), len(mI_list), len(mS_list)),
+        dtype=float,
+    )
+
+    for ai, state in enumerate(ground_states):
+        for ii, mI in enumerate(mI_list):
+            for si, mS in enumerate(mS_list):
+                amplitudes[ai, ii, si] = cg_coeff_F_to_mI_mS(
+                    I, state["F"], state["m"], mI, mS
+                )
+
+    return amplitudes
+
+
+def er_population_fractional_relaxation_rates(M_ER, p_steady, gamma_ER):
+    """Return the signed ER fractional rate of each steady-state population.
+
+    For a diagonal steady-state density matrix,
+
+        (d p_a / dt)_ER = gamma_ER [(M_ER p)_a - p_a].
+
+    The reported rate is
+
+        Gamma_a^(ER,net) = -(d p_a / dt)_ER / p_a.
+
+    Positive values mean ER removes population from the state; negative values
+    mean ER replenishes it. States with numerically zero population are blank.
+    """
+    p = np.asarray(p_steady, dtype=float)
+    er_derivative = float(gamma_ER) * (np.asarray(M_ER, dtype=float) @ p - p)
+    rates = np.full_like(p, np.nan, dtype=float)
+    populated = p > 1e-15
+    rates[populated] = -er_derivative[populated] / p[populated]
+    return rates
+
+
+def er_adjacent_coherence_self_relaxation_rates(atom, ground_states, gamma_ER):
+    """Return ER self-decay rates for infinitesimal rho_(m,m-1) coherences.
+
+    The electron-randomization channel is
+
+        E_ER(rho) = Tr_S(rho) tensor I_S/2.
+
+    For each adjacent coherence |a><b| within one F manifold, this function
+    evaluates its self-retention coefficient
+
+        k_ab = <a| E_ER(|a><b|) |b>,
+
+    and reports gamma_ER (1-k_ab). ER can also couple coherences with the same
+    Delta m, so this is the local/self-decay coefficient of an infinitesimal
+    coherence perturbation about the final diagonal steady state.
+    """
+    amplitudes = coupled_basis_amplitudes(atom, ground_states)
+    rates = np.full(len(ground_states), np.nan, dtype=float)
+
+    state_index = {
+        (float(state["F"]), float(state["m"])): idx
+        for idx, state in enumerate(ground_states)
+    }
+
+    for a_idx, a in enumerate(ground_states):
+        key_b = (float(a["F"]), float(a["m"] - 1.0))
+        b_idx = state_index.get(key_b)
+        if b_idx is None:
+            continue
+
+        C_a = amplitudes[a_idx]
+        C_b = amplitudes[b_idx]
+
+        # Nuclear operator after tracing the electron spin from |a><b|.
+        rho_I = np.einsum("is,js->ij", C_a, C_b)
+
+        # Project (rho_I tensor I_S/2) back onto <a| ... |b>.
+        self_retention = 0.5 * np.einsum("is,ij,js->", C_a, rho_I, C_b)
+        rates[a_idx] = float(gamma_ER) * (1.0 - float(self_retention))
+
+    return rates
+
 
 # ============================================================
 # 7b. Population-only spin-exchange matrix
@@ -1154,6 +1295,90 @@ def build_spin_exchange_matrix(atom, ground_states, p_reference):
             M[:, j] /= colsum[j]
 
     return M, electron_marginal
+
+
+def spin_exchange_population_fractional_relaxation_rates(M_SE, p_steady, R_SE):
+    """Return the signed SE fractional rate of each steady-state population.
+
+    For the final self-consistent mean-field spin-exchange map,
+
+        (d p_a / dt)_SE = R_SE [(M_SE p)_a - p_a].
+
+    The reported rate is
+
+        Gamma_a^(SE,net) = -(d p_a / dt)_SE / p_a.
+
+    Positive values mean spin exchange removes population from the state;
+    negative values mean spin exchange replenishes it. States with numerically
+    zero population are blank.
+    """
+    p = np.asarray(p_steady, dtype=float)
+    se_derivative = float(R_SE) * (np.asarray(M_SE, dtype=float) @ p - p)
+    rates = np.full_like(p, np.nan, dtype=float)
+    populated = p > 1e-15
+    rates[populated] = -se_derivative[populated] / p[populated]
+    return rates
+
+
+def spin_exchange_adjacent_coherence_self_relaxation_rates(
+    atom,
+    ground_states,
+    electron_marginal,
+    R_SE,
+):
+    """Return SE self-decay rates for infinitesimal adjacent coherences.
+
+    The app's fixed-reference mean-field spin-exchange channel is extended from
+    populations to operators as
+
+        E_SE(rho) = Tr_S(rho) tensor rho_S,
+
+    where rho_S is the electron-spin marginal of the final steady state. For
+    each adjacent coherence |a><b| in one F manifold, this function evaluates
+
+        k_ab = <a| E_SE(|a><b|) |b>
+
+    and reports R_SE (1-k_ab). The channel may also transfer amplitude among
+    coherences with the same Delta m, so this is the local/self-decay
+    coefficient of an infinitesimal perturbation, not an eigenmode decay rate.
+    """
+    amplitudes = coupled_basis_amplitudes(atom, ground_states)
+    electron_marginal = np.asarray(electron_marginal, dtype=float)
+    total = electron_marginal.sum()
+    if total > 0:
+        electron_marginal = electron_marginal / total
+    else:
+        electron_marginal = np.array([0.5, 0.5], dtype=float)
+
+    rates = np.full(len(ground_states), np.nan, dtype=float)
+    state_index = {
+        (float(state["F"]), float(state["m"])): idx
+        for idx, state in enumerate(ground_states)
+    }
+
+    for a_idx, a in enumerate(ground_states):
+        key_b = (float(a["F"]), float(a["m"] - 1.0))
+        b_idx = state_index.get(key_b)
+        if b_idx is None:
+            continue
+
+        C_a = amplitudes[a_idx]
+        C_b = amplitudes[b_idx]
+
+        # Nuclear operator after tracing the source electron spin.
+        rho_I = np.einsum("is,js->ij", C_a, C_b)
+
+        # Project rho_I tensor rho_S back onto the same adjacent coherence.
+        self_retention = np.einsum(
+            "is,ij,s,js->",
+            C_a,
+            rho_I,
+            electron_marginal,
+            C_b,
+        )
+        rates[a_idx] = float(R_SE) * (1.0 - float(self_retention))
+
+    return rates
 
 
 def steady_state_with_spin_exchange(L_linear, atom, ground_states, R_SE, max_iter=200, tol=1e-12):
@@ -1298,6 +1523,99 @@ def add_light_shift_difference_column(df_pop):
     return df
 
 
+def total_pumping_rate_by_ground_state(ground_states, diagnostics):
+    """Return R_m for every displayed |F,m> ground state.
+
+    For each active beam, R_ge[ground, excited] is the state-resolved optical
+    excitation rate after the beam intensity has been normalized to its selected
+    reference-transition pumping rate. Summing over all excited states and all
+    active beams gives the total optical depopulation rate R_m of each ground
+    Zeeman sublevel.
+    """
+    rates = np.zeros(len(ground_states), dtype=float)
+    for _beam, info in diagnostics:
+        R_ge = np.asarray(info["R_ge"], dtype=float)
+        if R_ge.shape[0] != len(ground_states):
+            raise ValueError("Optical-pumping diagnostic has an incompatible ground-state dimension.")
+        rates += np.sum(R_ge, axis=1)
+    return rates
+
+
+def optical_repopulation_fractional_rates(
+    optical_generator, populations, pumping_rates_s, population_floor=1e-15
+):
+    """Return the optical repopulation rate A_m for each ground state.
+
+    The optical generator can be decomposed as
+
+        L_op = W_rep - diag(R),
+
+    where R_m is the total excitation/depopulation rate from state m and
+    W_rep contains spontaneous-emission repopulation into the ground states,
+    including return to the same ground state. At the supplied population
+    distribution p, the repopulation flow into state m is (W_rep p)_m.
+
+    The table reports the corresponding fractional repopulation rate
+
+        A_m = (W_rep p)_m / p_m,
+
+    in s^-1, so that the signed net optical fractional population relaxation
+    rate is R_m - A_m. States with negligible population are left blank.
+    """
+    L_op = np.asarray(optical_generator, dtype=float)
+    p = np.asarray(populations, dtype=float)
+    R = np.asarray(pumping_rates_s, dtype=float)
+
+    if L_op.shape != (len(p), len(p)) or R.shape != p.shape:
+        raise ValueError("Incompatible dimensions in optical repopulation calculation.")
+
+    W_rep = L_op + np.diag(R)
+    repopulation_flow = W_rep @ p
+    # Remove only tiny negative roundoff; physical repopulation flow is nonnegative.
+    repopulation_flow[np.abs(repopulation_flow) < 1e-14] = 0.0
+
+    A = np.full_like(p, np.nan, dtype=float)
+    mask = p > population_floor
+    A[mask] = repopulation_flow[mask] / p[mask]
+    return A
+
+
+def add_adjacent_pumping_relaxation_columns(df_pop):
+    """Add Gamma^R and Gamma^R/(2 pi) for adjacent Zeeman coherences.
+
+    For the adjacent coherence rho_{m,m-1}, direct optical depopulation gives
+
+        Gamma^R = (R_m + R_{m-1}) / 2
+
+    in s^-1. The corresponding ordinary-frequency linewidth is
+    Gamma^R/(2 pi) in Hz. The lowest-m state in each F manifold has no adjacent
+    lower-m partner, so both entries are blank there.
+    """
+    df = df_pop.copy()
+    rate_column = "adjacent_pumping_relaxation_s"
+    hz_column = "adjacent_pumping_relaxation_Hz"
+    df[rate_column] = np.nan
+    df[hz_column] = np.nan
+
+    if "pumping_rate_s" not in df.columns:
+        return df
+
+    for _F_value, group in df.groupby("F", sort=False):
+        group_sorted = group.sort_values("m")
+        rate_by_m = dict(zip(group_sorted["m"], group_sorted["pumping_rate_s"]))
+        for row_index, row in group_sorted.iterrows():
+            m_value = row["m"]
+            previous_m = m_value - 1.0
+            if previous_m in rate_by_m:
+                gamma_R = 0.5 * (
+                    row["pumping_rate_s"] + rate_by_m[previous_m]
+                )
+                df.loc[row_index, rate_column] = gamma_R
+                df.loc[row_index, hz_column] = gamma_R / (2.0 * np.pi)
+
+    return df
+
+
 def apply_two_line_column_headers(df, header_map):
     """Use real pandas MultiIndex headers so Streamlit shows units on a second header row."""
     display_df = df.copy()
@@ -1407,20 +1725,154 @@ def render_transition_table_html(df):
 """
 
 
+def render_zeeman_properties_table_html(df):
+    """Render the Zeeman-sublevel table with a guaranteed hyperfine separator.
+
+    A custom HTML table is used because Streamlit's dataframe renderer does not
+    reliably preserve pandas Styler border rules. The first row of every new F
+    manifold receives a 2 px top border, making the boundary between
+    F=I-1/2 and F=I+1/2 clearly visible. Column widths are determined
+    automatically from the rendered header and cell contents.
+    """
+    import html
+
+    columns = [
+        ("F", "F", None, "g"),
+        ("m", "m", None, "g"),
+        ("P_F", "P<sub>F</sub>", None, ".3f"),
+        ("Pₘ", "P<sub>m</sub>", None, ".3f"),
+        ("Dₘ", "D<sub>m</sub>", None, ".3f"),
+        ("νLS (Hz)", "ν<sub>LS</sub>", "Hz", ".1f"),
+        ("Δν (Hz)", "Δν", "Hz", ".1f"),
+        ("Γ^{ER}_{m} (s^-1)", "Γ<sup>ER</sup><sub>m</sub>", "s<sup>−1</sup>", ".2f"),
+        ("Γ^{SE}_{m} (s^-1)", "Γ<sup>SE</sup><sub>m</sub>", "s<sup>−1</sup>", ".2f"),
+        ("Aₘ (s⁻¹)", "A<sub>m</sub>", "s<sup>−1</sup>", ".1f"),
+        ("Rₘ (s⁻¹)", "R<sub>m</sub>", "s<sup>−1</sup>", ".1f"),
+        ("Γ^R (s^-1)", "Γ<sup>R</sup>", "s<sup>−1</sup>", ".1f"),
+        ("Γ^R/2π (Hz)", "Γ<sup>R</sup>/2π", "Hz", ".1f"),
+        ("Γ^{ER}_{m,m-1} (s^-1)", "Γ<sup>ER</sup><sub>m,m−1</sub>", "s<sup>−1</sup>", ".2f"),
+        ("Γ^{SE}_{m,m-1} (s^-1)", "Γ<sup>SE</sup><sub>m,m−1</sub>", "s<sup>−1</sup>", ".2f"),
+    ]
+
+    def fmt(value, spec):
+        if pd.isna(value):
+            return ""
+        if spec == "g":
+            return f"{float(value):g}"
+        return format(float(value), spec)
+
+    header_cells = []
+    for _key, title, unit, _spec in columns:
+        unit_html = f"<div class='unit'>({unit})</div>" if unit else ""
+        header_cells.append(
+            f"<th><div class='quantity'>{title}</div>{unit_html}</th>"
+        )
+    headers = "".join(header_cells)
+
+    body_rows = []
+    previous_F = None
+    for _, row in df.iterrows():
+        current_F = float(row["F"])
+        separator = previous_F is not None and not np.isclose(current_F, previous_F)
+        row_class = " class='hyperfine-separator'" if separator else ""
+        cells = "".join(
+            f"<td>{html.escape(fmt(row[key], spec))}</td>"
+            for key, _title, _unit, spec in columns
+        )
+        body_rows.append(f"<tr{row_class}>{cells}</tr>")
+        previous_F = current_F
+
+    return f"""
+<style>
+.zeeman-properties-wrap {{
+    max-height: 315px;
+    overflow: auto;
+    border: 1px solid rgba(49, 51, 63, 0.20);
+    border-radius: 0.35rem;
+}}
+.zeeman-properties-table {{
+    border-collapse: collapse;
+    width: max-content;
+    min-width: 0;
+    table-layout: auto;
+    font-size: 0.86rem;
+}}
+.zeeman-properties-table th {{
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: rgb(250, 250, 250);
+    border-bottom: 1px solid rgba(49, 51, 63, 0.30);
+    padding: 0.35rem 0.45rem;
+    text-align: right;
+    white-space: nowrap;
+}}
+.zeeman-properties-table th .quantity {{
+    line-height: 1.15;
+}}
+.zeeman-properties-table th .unit {{
+    line-height: 1.15;
+    font-size: 0.78rem;
+    font-weight: 400;
+    color: rgba(49, 51, 63, 0.72);
+}}
+.zeeman-properties-table td {{
+    border-bottom: 1px solid rgba(49, 51, 63, 0.12);
+    padding: 0.30rem 0.45rem;
+    text-align: right;
+    white-space: nowrap;
+}}
+.zeeman-properties-table tr.hyperfine-separator td {{
+    border-top: 2px solid rgba(49, 51, 63, 0.90) !important;
+}}
+</style>
+<div class="zeeman-properties-wrap">
+<table class="zeeman-properties-table">
+<thead><tr>{headers}</tr></thead>
+<tbody>{''.join(body_rows)}</tbody>
+</table>
+</div>
+"""
+
+
+
+APP_BASE_TITLE = "alkali pumping"
+
+
+def current_browser_title():
+    """Return the browser title from the live condition name field."""
+    raw_name = st.session_state.get("condition_name", "")
+    if not str(raw_name or "").strip():
+        return APP_BASE_TITLE
+    name = clean_condition_name(raw_name)
+    return f"{APP_BASE_TITLE}: {name}"
+
+
+def set_browser_tab_title():
+    """Set the real browser-tab title after Streamlit has rendered the page."""
+    title_js = json.dumps(current_browser_title())
+    components.html(
+        f"<script>window.parent.document.title = {title_js};</script>",
+        height=0,
+        width=0,
+    )
+
+
 # ============================================================
 # 9. Streamlit UI
 # ============================================================
 
 st.set_page_config(
-    page_title="Alkali ER Optical Pumping",
+    page_title=current_browser_title(),
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 st.title("Alkali steady-state populations: three pumps + N₂ + ER + SE")
+set_browser_tab_title()
 
 # ============================================================
-# Sidebar: all input conditions
+# Sidebar: all input condition values
 # ============================================================
 
 with st.sidebar:
@@ -1454,9 +1906,6 @@ with st.sidebar:
             padding: 0.20rem 0.25rem;
             min-height: 2.2rem;
         }
-        section[data-testid="stSidebar"] div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzoneInstructions"] {
-            display: none;
-        }
         section[data-testid="stSidebar"] div[data-testid="stFileUploader"] button,
         section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button {
             height: 2.25rem;
@@ -1468,40 +1917,14 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    st.caption("Conditions")
-    load_col, save_col = st.columns(2, gap="small")
+    st.caption("condition")
+    if "condition_name" not in st.session_state:
+        st.session_state["condition_name"] = "default"
 
-    with load_col:
-        uploaded_condition = st.file_uploader(
-            "Load condition",
-            type=["json"],
-            key="condition_file_uploader",
-            help="Choose a saved JSON condition file. It loads immediately after selection.",
-            label_visibility="collapsed",
-        )
-
-    with save_col:
-        condition_json = json.dumps(make_current_condition_dict(), indent=2)
-        st.download_button(
-            "Save condition",
-            data=condition_json,
-            file_name=f"alkali_er_condition_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json",
-            key="save_condition_button",
-            width="stretch",
-        )
-
-    if uploaded_condition is not None:
-        load_signature = (uploaded_condition.name, uploaded_condition.size)
-        if st.session_state.get("_loaded_condition_signature") != load_signature:
-            try:
-                payload = json.loads(uploaded_condition.getvalue().decode("utf-8"))
-                apply_loaded_condition_dict(payload)
-                st.session_state["_loaded_condition_signature"] = load_signature
-                st.success("Condition loaded.")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Could not load condition file: {exc}")
+    # Keep the controls visually at the top, but populate this placeholder only
+    # after every sidebar widget has been instantiated. This ensures that the
+    # downloaded JSON contains the complete, current condition.
+    condition_controls_placeholder = st.empty()
 
     st.divider()
     st.header("Atom / cell")
@@ -1682,6 +2105,59 @@ with st.sidebar:
         key="show_rate_matrices",
     )
 
+    # Populate the top placeholder after all condition widgets exist.
+    # The condition name widget is evaluated before the download payload is
+    # serialized, so the JSON always contains the value currently visible here.
+    with condition_controls_placeholder.container():
+        load_col, save_col = st.columns(2, gap="small")
+
+        with load_col:
+            st.file_uploader(
+                "Load condition",
+                type=["json"],
+                key="condition_file_uploader",
+                help="Choose an alkali_pumping v2.23 JSON condition file.",
+                label_visibility="collapsed",
+                on_change=load_condition_callback,
+            )
+
+        with save_col:
+            save_button_placeholder = st.empty()
+
+        condition_name = st.text_input(
+            "condition name",
+            key="condition_name",
+            help=(
+                "This value is saved inside the JSON conditions, used as the "
+                "suggested filename, and appended to the browser title after "
+                "the condition is loaded or saved."
+            ),
+        )
+
+        condition_save_name = clean_condition_name(condition_name)
+        condition_values = current_condition_values(
+            condition_name=condition_save_name
+        )
+        condition_payload = build_condition_payload(condition_values)
+        condition_json = json.dumps(condition_payload, indent=2)
+
+        save_button_placeholder.download_button(
+            "Save condition",
+            data=condition_json,
+            file_name=f"{condition_save_name}.json",
+            mime="application/json",
+            key="save_condition_button",
+            width="stretch",
+        )
+
+        if st.session_state.get("_condition_load_message"):
+            st.success(st.session_state.pop("_condition_load_message"))
+        if st.session_state.get("_condition_load_error"):
+            st.error(
+                "Could not load condition file: "
+                + st.session_state.pop("_condition_load_error")
+            )
+
 
 # ============================================================
 # Build model
@@ -1786,8 +2262,11 @@ for b in beam_inputs:
         L_total += Lb
         diagnostics.append((b, info))
 
+# Preserve the optical-only generator before ER and SE terms are added.
+L_optical = L_total.copy()
+
 M_ER = build_ER_matrix(atom, ground_states)
-L_linear = L_total + gamma_ER * (M_ER - np.eye(N))
+L_linear = L_optical + gamma_ER * (M_ER - np.eye(N))
 
 se_rate_info = spin_exchange_rate_info(atom_name, atom, temperature_C)
 R_SE_inferred = se_rate_info["rate_s"]
@@ -1816,17 +2295,62 @@ light_shift_Hz, light_shift_available = total_light_shift_Hz_from_diagnostics(
     beam_inputs,
     diagnostics,
 )
+pumping_rate_by_state_s = total_pumping_rate_by_ground_state(
+    ground_states,
+    diagnostics,
+)
+optical_repopulation_rate_by_state_s = optical_repopulation_fractional_rates(
+    L_optical,
+    p_ss,
+    pumping_rate_by_state_s,
+)
+
+er_population_relaxation_s = er_population_fractional_relaxation_rates(
+    M_ER, p_ss, gamma_ER
+)
+er_adjacent_coherence_relaxation_s = er_adjacent_coherence_self_relaxation_rates(
+    atom, ground_states, gamma_ER
+)
+
+se_population_relaxation_s = spin_exchange_population_fractional_relaxation_rates(
+    se_solver_info["M_SE"], p_ss, R_SE
+)
+se_adjacent_coherence_relaxation_s = (
+    spin_exchange_adjacent_coherence_self_relaxation_rates(
+        atom,
+        ground_states,
+        se_solver_info["electron_marginal"],
+        R_SE,
+    )
+)
 
 df_pop = pd.DataFrame({
     "F": [g["F"] for g in ground_states],
     "m": [g["m"] for g in ground_states],
     "population": p_ss,
     "light_shift_Hz": light_shift_Hz,
+    "optical_repopulation_rate_s": optical_repopulation_rate_by_state_s,
+    "pumping_rate_s": pumping_rate_by_state_s,
+    "er_population_relaxation_s": er_population_relaxation_s,
+    "er_adjacent_coherence_relaxation_s": er_adjacent_coherence_relaxation_s,
+    "se_population_relaxation_s": se_population_relaxation_s,
+    "se_adjacent_coherence_relaxation_s": se_adjacent_coherence_relaxation_s,
 })
 df_pop = add_population_difference_column(df_pop)
 df_pop = add_light_shift_difference_column(df_pop)
+df_pop = add_adjacent_pumping_relaxation_columns(df_pop)
 
 df_F = population_by_F(df_pop)
+
+# Show the total population P_F of each hyperfine manifold only on its m=0 row
+# in the Zeeman sublevel properties table.
+df_pop["hyperfine_population"] = np.nan
+for _, f_row in df_F.iterrows():
+    manifold_mask = (
+        np.isclose(df_pop["F"].to_numpy(dtype=float), float(f_row["F"]))
+        & np.isclose(df_pop["m"].to_numpy(dtype=float), 0.0)
+    )
+    df_pop.loc[manifold_mask, "hyperfine_population"] = float(f_row["population"])
 
 df_trans = hyperfine_transition_table(
     atom=atom,
@@ -1839,23 +2363,56 @@ df_trans = hyperfine_transition_table(
 labels = [g["label"] for g in ground_states]
 
 df_pop_display = df_pop.rename(columns={
+    "hyperfine_population": "P_F",
     "population": "Pₘ",
-    "population_difference": "Pₘ − Pₘ₋₁",
+    "population_difference": "Dₘ",
     "light_shift_Hz": "νLS (Hz)",
-    "light_shift_difference_Hz": "νₘ − νₘ₋₁ (Hz)",
+    "light_shift_difference_Hz": "Δν (Hz)",
+    "optical_repopulation_rate_s": "Aₘ (s⁻¹)",
+    "pumping_rate_s": "Rₘ (s⁻¹)",
+    "adjacent_pumping_relaxation_s": "Γ^R (s^-1)",
+    "adjacent_pumping_relaxation_Hz": "Γ^R/2π (Hz)",
+    "er_population_relaxation_s": "Γ^{ER}_{m} (s^-1)",
+    "er_adjacent_coherence_relaxation_s": "Γ^{ER}_{m,m-1} (s^-1)",
+    "se_population_relaxation_s": "Γ^{SE}_{m} (s^-1)",
+    "se_adjacent_coherence_relaxation_s": "Γ^{SE}_{m,m-1} (s^-1)",
 })
-# Keep the light-shift columns visible and placed at the far right of the table.
-df_pop_display = df_pop_display[["F", "m", "Pₘ", "Pₘ − Pₘ₋₁", "νLS (Hz)", "νₘ − νₘ₋₁ (Hz)"]]
+# Place the ER and SE population rates immediately before A_m, then R_m and the adjacent-coherence columns.
+df_pop_display = df_pop_display[[
+    "F",
+    "m",
+    "P_F",
+    "Pₘ",
+    "Dₘ",
+    "νLS (Hz)",
+    "Δν (Hz)",
+    "Γ^{ER}_{m} (s^-1)",
+    "Γ^{SE}_{m} (s^-1)",
+    "Aₘ (s⁻¹)",
+    "Rₘ (s⁻¹)",
+    "Γ^R (s^-1)",
+    "Γ^R/2π (Hz)",
+    "Γ^{ER}_{m,m-1} (s^-1)",
+    "Γ^{SE}_{m,m-1} (s^-1)",
+]]
 
 
 # ============================================================
 # Main compact layout
 # ============================================================
 
+def compact_section_title(text):
+    """Render a compact title at about half the size of st.header."""
+    st.markdown(
+        f"<div style='font-size:1rem; font-weight:600; line-height:1.25; "
+        f"margin:0.25rem 0 0.45rem 0;'>{text}</div>",
+        unsafe_allow_html=True,
+    )
+
 left, right = st.columns([0.62, 1.63], gap="small")
 
 with left:
-    st.subheader(f"{atom_name} ground-state populations")
+    compact_section_title(f"{atom_name} ground-state populations")
 
     fig, ax = plt.subplots(figsize=(4.6, 3.0))
     ax.bar(labels, p_ss)
@@ -1866,47 +2423,77 @@ with left:
     st.pyplot(fig, width="stretch")
 
 with right:
-    # Give the Zeeman table more width so the final light-shift column is visible.
-    cc1, cc2 = st.columns([1.33, 0.54], gap="small")
+    compact_section_title("Zeeman sublevel properties")
 
-    with cc1:
-        st.caption("Zeeman sublevel population & shift")
-        st.dataframe(
-            df_pop_display.style.format({
-                "F": "{:g}",
-                "m": "{:g}",
-                "Pₘ": "{:.3f}",
-                "Pₘ − Pₘ₋₁": "{:.3f}",
-                "νLS (Hz)": "{:.1f}",
-                "νₘ − νₘ₋₁ (Hz)": "{:.1f}",
-            }, na_rep=""),
-            width="stretch",
-            height=315,
-        )
-        if light_shift_available:
-            st.caption("νLS is shown because all active pump-beam light-shift Hamiltonians commute with the selected quantization-axis spin component.")
-        else:
-            st.caption("νLS is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
+    st.markdown(
+        render_zeeman_properties_table_html(df_pop_display),
+        unsafe_allow_html=True,
+    )
+    if light_shift_available:
+        st.caption("νLS is shown because all active pump-beam light-shift Hamiltonians commute with the selected quantization-axis spin component.")
+    else:
+        st.caption("νLS is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
+    st.caption(
+        "Dₘ = Pₘ - Pₘ₋₁ is the population difference between adjacent Zeeman sublevels within the same F manifold.  \n"
+        "Γ^{ER}_{m} is the signed net fractional ER rate evaluated at the steady state; positive means  population loss and negative means population replenishment.  \n" 
+        "Γ^{SE}_{m} is the signed net fractional SE rate at the final steady state  \n"
+        "Aₘ is the optical repopulation rate into |F,m⟩ divided by its steady-state population: Aₘ = [Σₙ Wₘ←ₙ Pₙ]/Pₘ.  \n"
+        "Δν = νLS,m − νLS,m−1 is the adjacent-sublevel light-shift difference.  \n"
+        "Rₘ is the total optical excitation/depopulation rate of |F,m⟩, summed over excited states and all active pump beams.  \n"
+        "Γ^R = (Rₘ + Rₘ₋₁)/2 in s⁻¹, and Γ^R/2π reports the same relaxation rate in Hz.  \n"
+        "Γ^{ER}_{m,m-1} is the self-decay coefficient of an infinitesimal adjacent coherence perturbation under the ER channel.  \n"
+        "Γ^{SE}_{m,m-1} is the corresponding local adjacent-coherence self-decay coefficient under the steady-state mean-field SE channel."
+    )
 
-    with cc2:
-        st.caption("Population by F")
-        st.dataframe(
-            df_F.style.format({
-                "F": "{:g}",
-                "population": "{:.6f}",
-            }),
-            width="stretch",
-            height=100,
-        )
+    summary_sum_p = p_ss.sum()
+    summary_m = expectation_m(ground_states, p_ss)
+    summary_m2 = expectation_m2(ground_states, p_ss)
+    st.markdown(
+        f"""
+        <style>
+        .state-summary-row {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-top: 0.35rem;
+            font-size: 0.90rem;
+            line-height: 1.35;
+        }}
+        .state-summary-item {{
+            display: inline-flex;
+            align-items: baseline;
+            gap: 0.35rem;
+            white-space: nowrap;
+        }}
+        .state-summary-label {{
+            font-weight: 600;
+        }}
+        .state-summary-value {{
+            font-family: inherit;
+            font-size: inherit;
+            font-weight: 400;
+            font-variant-numeric: tabular-nums;
+        }}
+        </style>
+        <div class="state-summary-row">
+            <div class="state-summary-item">
+                <span class="state-summary-label">Σp =</span>
+                <span class="state-summary-value">{summary_sum_p:.8f}</span>
+            </div>
+            <div class="state-summary-item">
+                <span class="state-summary-label">〈m〉 =</span>
+                <span class="state-summary-value">{summary_m:.6f}</span>
+            </div>
+            <div class="state-summary-item">
+                <span class="state-summary-label">〈m²〉 =</span>
+                <span class="state-summary-value">{summary_m2:.6f}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        m1 = expectation_m(ground_states, p_ss)
-        m2 = expectation_m2(ground_states, p_ss)
-
-        st.write(f"Σp = {p_ss.sum():.8f}")
-        st.write(f"〈m〉 = {m1:.6f}")
-        st.write(f"〈m²〉 = {m2:.6f}")
-
-st.subheader("D1/D2 hyperfine transition detunings")
+compact_section_title("D1/D2 hyperfine transition detunings")
 st.caption(
     "Detunings are relative to the corresponding zero-pressure D1 or D2 fine-structure line center. "
     "Absolute optical frequencies are shown in MHz. Blank pump-frequency cells mean that pump beam is on the other D line."
@@ -2027,6 +2614,8 @@ with st.expander("Light-shift calculation", expanded=False):
 # ============================================================
 # Notes shown at bottom
 # ============================================================
+
+
 
 with st.expander("Model and sign convention"):
     st.write("The solved equation is")
