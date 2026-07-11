@@ -1951,7 +1951,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    st.caption("condition")
+    st.header("condition")
     if "condition_name" not in st.session_state:
         st.session_state["condition_name"] = "default"
 
