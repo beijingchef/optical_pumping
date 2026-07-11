@@ -1903,7 +1903,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.title("Alkali steady-state populations: three pumps + N₂ + ER + SE")
+st.title("Alkali pumping: three pumps + ER + SE")
 
 # ============================================================
 # Sidebar: all input condition values
