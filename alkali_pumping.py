@@ -2565,7 +2565,7 @@ with left:
         .population-summary-row {{
             display: flex;
             flex-wrap: wrap;
-            gap: 0.9rem;
+            gap: 0.8rem;
             margin-top: 0rem;
             font-size: 0.9rem;
             line-height: 1.35;
