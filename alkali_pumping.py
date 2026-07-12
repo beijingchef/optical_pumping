@@ -1,4 +1,4 @@
-# alkali_pumping_v2.35.py
+# alkali_pumping_v2.38.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -8,7 +8,7 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v2.35.py
+#   streamlit run alkali_pumping_v2.38.py
 #
 # Model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + Gamma_ER (M_ER - I)] p
@@ -408,9 +408,9 @@ def spherical_weights_relative_to_quant_axis(k_axis, pol, q_axis):
     E_lab = lab_e_field(k_axis, pol)
     Ex, Ey, Ez = local_components(E_lab, q_axis)
 
-    E_plus = -(Ex + 1j * Ey) / sqrt(2)
+    E_plus = -(Ex - 1j * Ey) / sqrt(2)
     E_zero = Ez
-    E_minus = (Ex - 1j * Ey) / sqrt(2)
+    E_minus = (Ex + 1j * Ey) / sqrt(2)
 
     weights = {
         -1: abs(E_minus)**2,
@@ -667,7 +667,7 @@ def hyperfine_transition_choices(atom, line, n2_pressure_torr, n2_coeffs, allowe
             detP = float(det0 + pressure_shift)
             # Keep the UI label independent of N2 pressure so Streamlit preserves
             # the user's selected reference transition when pressure changes.
-            label = f"{line} F={Fg:g} → F'={Fe:g}"
+            label = f"{Fg:g}→{Fe:g}"
             rows.append({
                 "line": line,
                 "Fg": float(Fg),
@@ -754,19 +754,19 @@ DEFAULT_STARTUP_CONDITION = {
     "D1_shift": -8.25,
     "D2_shift": -5.9,
     "line1": "D1",
-    "transition1": "D1 F=1 → F'=2",
+    "transition1": "1→2",
     "det_rel1": 0.0,
     "rate1": 1200.0,
     "k1": "x",
     "pol1": "linear z",
     "line2": "D1",
-    "transition2": "D1 F=2 → F'=2",
+    "transition2": "2→2",
     "det_rel2": 400.0,
     "rate2": 400.0,
     "k2": "x",
     "pol2": "linear z",
     "line3": "D1",
-    "transition3": "D1 F=2 → F'=2",
+    "transition3": "2→2",
     "det_rel3": 0.0,
     "rate3": 0.0,
     "k3": "x",
@@ -782,6 +782,7 @@ def clean_condition_name(value):
     if name.lower().endswith(".json"):
         name = name[:-5].rstrip()
     return name or "default"
+
 
 
 def build_condition_payload(values):
@@ -1960,7 +1961,6 @@ with st.sidebar:
     # downloaded JSON contains the complete, current condition.
     condition_controls_placeholder = st.empty()
 
-    st.divider()
     st.header("Atom / cell")
 
     atom_row_col1, atom_row_col2, atom_row_col3 = st.columns(3, gap="small")
@@ -2001,7 +2001,7 @@ with st.sidebar:
         )
     with cell_row_col2:
         gamma_ER = st.number_input(
-            "ER rate ΓER (s⁻¹)",
+            "ER rate (s⁻¹)",
             min_value=0.0,
             step=1.0,
             format="%.1f",
@@ -2017,9 +2017,9 @@ with st.sidebar:
 
     se_rate_preview = spin_exchange_rate_info(atom_name, atom, temperature_C)
     st.caption(
-        f"Inferred R_SE = {se_rate_preview['rate_s']:.3g} s⁻¹ "
-        f"from n = {se_rate_preview['density_cm3']:.3g} cm⁻³ and "
-        f"σ_SE = {se_rate_preview['sigma_cm2']:.2g} cm²."
+        f"R_SE={se_rate_preview['rate_s']:.3g}s⁻¹ "
+        f"for n={se_rate_preview['density_cm3']:.2g}cm⁻³ and "
+        f"σ_SE={se_rate_preview['sigma_cm2']:.2g}cm²."
     )
 
     with st.expander("N₂ coefficients", expanded=False):
@@ -2071,7 +2071,7 @@ with st.sidebar:
         if rate_key not in st.session_state:
             st.session_state[rate_key] = float(default_rate)
 
-        line = st.selectbox("Line", ["D1", "D2"], index=default_line_index, key=f"line{beam_number}")
+        line = st.selectbox("Reference Line", ["D1", "D2"], index=default_line_index, key=f"line{beam_number}")
 
         transition_options = transition_choice_labels(
             atom, line, n2_pressure_torr, n2_coeffs, allowed_only=show_allowed_only
@@ -2085,26 +2085,27 @@ with st.sidebar:
                 )
             st.session_state[transition_key] = preferred_transition if preferred_transition in transition_options else transition_options[0]
         transition = st.selectbox(
-            "Reference hyperfine transition",
+            "hpf-transition",
             transition_options,
             key=transition_key,
-            help="Laser detuning is defined relative to this pressure-shifted hyperfine transition.",
         )
         det_rel = st.number_input(
-            "Detuning from selected transition (MHz)",
+            "Detuning (MHz)",
             step=10.0,
             format="%g",
             key=det_rel_key,
+            help="Laser detuning is defined relative to this pressure-shifted selected hyperfine transition.",
         )
         rate = st.number_input(
-            "Pumping rate for selected transition (s⁻¹)",
+            "Pump rate (s⁻¹)",
             min_value=0.0,
             step=10.0,
-            format="%.1f",
+            format="%.0f",
             key=rate_key,
+            help="Defined as the average depopulation rate for the selected transition of an unpolarized atom.",
         )
         k_axis = st.selectbox(
-            "Propagation direction",
+            "beam direction",
             ["z", "x", "y"],
             index=0,
             key=f"k{beam_number}",
@@ -2143,7 +2144,7 @@ with st.sidebar:
     # The condition name widget is evaluated before the download payload is
     # serialized, so the JSON always contains the value currently visible here.
     with condition_controls_placeholder.container():
-        load_col, save_col = st.columns(2, gap="small")
+        load_col, save_col = st.columns([0.38,0.62], gap="small")
 
         with load_col:
             st.file_uploader(
@@ -2157,16 +2158,15 @@ with st.sidebar:
 
         with save_col:
             save_button_placeholder = st.empty()
-
-        condition_name = st.text_input(
-            "condition name",
-            key="condition_name",
-            help=(
-                "This value is saved inside the JSON conditions, used as the "
-                "suggested filename, and appended to the browser title after "
-                "the condition is loaded or saved."
-            ),
-        )
+            condition_name = st.text_input(
+                "condition name",
+                key="condition_name",
+                help=(
+                    "This value is saved inside the JSON conditions, used as the "
+                    "suggested filename, and appended to the browser title after "
+                    "the condition is loaded or saved."
+                ),
+            )
 
         condition_save_name = clean_condition_name(condition_name)
         condition_values = current_condition_values(
@@ -2438,7 +2438,7 @@ df_pop_display = df_pop_display[[
 def compact_section_title(text):
     """Render a compact title at about half the size of st.header."""
     st.markdown(
-        f"<div style='font-size:1rem; font-weight:600; line-height:1.25; "
+        f"<div style='font-size:1.25rem; font-weight:600; line-height:1.25; "
         f"margin:0.25rem 0 0.45rem 0;'>{text}</div>",
         unsafe_allow_html=True,
     )
@@ -2469,14 +2469,14 @@ with right:
         st.caption("νLS is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
     st.caption(
         "Dₘ = Pₘ - Pₘ₋₁ is the population difference between adjacent Zeeman sublevels within the same F manifold.  \n"
-        "Γ^{ER}_{m} is the signed net fractional ER rate evaluated at the steady state; positive means  population loss and negative means population replenishment.  \n" 
-        "Γ^{SE}_{m} is the signed net fractional SE rate at the final steady state  \n"
+        "Δν = νLSₘ - νLSₘ₋₁ is the adjacent-sublevel light-shift difference.  \n"
+        "Γ^{ER}_{m} is the signed net fractional ER rate of population at the steady state; positive means loss and negative means replenishment.  \n" 
+        "Γ^{SE}_{m} is the signed net fractional SE rate of population at the steady state  \n"
         "Aₘ is the optical repopulation rate into |F,m⟩ divided by its steady-state population: Aₘ = [Σₙ Wₘ←ₙ Pₙ]/Pₘ.  \n"
-        "Δν = νLS,m − νLS,m−1 is the adjacent-sublevel light-shift difference.  \n"
-        "Rₘ is the total optical excitation/depopulation rate of |F,m⟩, summed over excited states and all active pump beams.  \n"
+        "Rₘ is the total optical depopulation rate of |F,m⟩, summed over excited states and all active pump beams.  \n"
         "Γ^R = (Rₘ + Rₘ₋₁)/2 in s⁻¹, and Γ^R/2π reports the same relaxation rate in Hz.  \n"
-        "Γ^{ER}_{m,m-1} is the self-decay coefficient of an infinitesimal adjacent coherence perturbation under the ER channel.  \n"
-        "Γ^{SE}_{m,m-1} is the corresponding local adjacent-coherence self-decay coefficient under the steady-state mean-field SE channel."
+        "Γ^{ER}_{m,m-1} is the local adjacent coherence self-decay coefficient under the the steady-state ER channel.  \n"
+        "Γ^{SE}_{m,m-1} is the local adjacent-coherence self-decay coefficient under the steady-state mean-field SE channel."
     )
 
 
