@@ -2545,7 +2545,7 @@ with left:
 
         ax.bar(m_labels, populations)
         ax.set_ylabel("Population")
-        ax.set_title(f"{panel_name}: F={F_value:g}", fontsize=10, pad=3)
+        ax.set_title(f"{panel_name}: F={F_value:g}", fontsize=12, pad=3)
 
     population_axis_max = max(0.01, 1.08 * float(np.max(p_ss)))
     ax_upper.set_ylim(0.0, population_axis_max)
