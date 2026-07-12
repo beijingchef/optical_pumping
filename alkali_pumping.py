@@ -2505,7 +2505,7 @@ df_pop_display = df_pop_display.sort_values(
 def compact_section_title(text):
     """Render a compact title at about half the size of st.header."""
     st.markdown(
-        f"<div style='font-size:1.25rem; font-weight:600; line-height:1.25; "
+        f"<div style='text-align: center; font-size:1.25rem; font-weight:600; line-height:1.25; "
         f"margin:0.25rem 0 0.45rem 0;'>{text}</div>",
         unsafe_allow_html=True,
     )
