@@ -2565,15 +2565,15 @@ with left:
         .population-summary-row {{
             display: flex;
             flex-wrap: wrap;
-            gap: 1rem;
-            margin-top: 0.35rem;
-            font-size: 0.90rem;
+            gap: 0.9rem;
+            margin-top: 0.2rem;
+            font-size: 0.80rem;
             line-height: 1.35;
         }}
         .population-summary-item {{
             display: inline-flex;
             align-items: baseline;
-            gap: 0.35rem;
+            gap: 0.25rem;
             white-space: nowrap;
         }}
         .population-summary-label {{
