@@ -1837,7 +1837,7 @@ def render_zeeman_properties_table_html(df):
         ("P_F", "P<sub>F</sub>", None, ".3f"),
         ("Pₘ", "P<sub>m</sub>", None, ".3f"),
         ("Dₘ", "D<sub>m</sub>", None, ".3f"),
-        ("νLS (Hz)", "ν<sub>LS</sub>", "Hz", ".1f"),
+        ("νLS (Hz)", "ν<sup>LS</sup>", "Hz", ".1f"),
         ("Δν (Hz)", "Δν", "Hz", ".1f"),
         ("Γ^{ER}_{m} (s^-1)", "Γ<sup>ER</sup><sub>m</sub>", "s<sup>−1</sup>", ".2f"),
         ("Γ^{SE}_{m} (s^-1)", "Γ<sup>SE</sup><sub>m</sub>", "s<sup>−1</sup>", ".2f"),
@@ -2613,15 +2613,17 @@ with right:
     with tip:
         with st.popover("❓"):
             st.markdown(
-                "Dₘ = Pₘ - Pₘ₋₁ is the population difference between adjacent Zeeman sublevels of the same F.  \n"
-                "Δν = νLSₘ - νLSₘ₋₁ is the adjacent-sublevel light-shift difference.  \n"
-                "Γ^{ER}_{m} is the signed net fractional ER rate of population; positive means loss.  \n" 
-                "Γ^{SE}_{m} is the signed net fractional SE rate of population at the steady state  \n"
-                "Aₘ is the repopulation rate into |F,m⟩ divided by its steady-state population: Aₘ = [Σₙ Wₘ←ₙ Pₙ]/Pₘ.  \n"
-                "Rₘ is the depopulation rate from |F,m⟩, summed over excited states and all active pump beams.  \n"
-                "Γ^R = (Rₘ + Rₘ₋₁)/2 is the pump-induced adjacent-coherence decay rate, and Γ^R/2π is the corresponding broadening.  \n"
-                "Γ^{ER}_{m,m-1} is the local adjacent-coherence self-decay rate due to ER.  \n"
-                "Γ^{SE}_{m,m-1} is the adjacent-coherence self-decay rate under the steady-state mean-field SE."
+                r"""
+                $\small D_m=P_m-P_{m-1}$ is the population difference between adjacent Zeeman sublevels.  
+                $\small \Delta\nu=\nu^{LS}_{m}-\nu^{LS}_{m-1}$ is the adjacent-sublevel light-shift difference.  
+                $\small\Gamma^{ER}_{m}$ is the signed net fractional ER rate of population; positive means loss.  
+                $\small \Gamma^{SE}_{m}$ is the signed net fractional SE rate of population at the steady state.  
+                $\small A_m$ is the repopulation rate into $\small \lvert F,m\rangle$ divided by its steady-state population.  
+                $\small R_m$ is the depopulation rate from $\small\lvert F,m\rangle$, summed over excited states and all active pump beams.  
+                $\small \Gamma^R=(R_m+R_{m-1})/2$ is the pump-induced adjacent-coherence decay rate, and $\small \Gamma^R/2\pi$ is the corresponding broadening.  
+                $\small \Gamma^{ER}_{m,m-1}$ is the local adjacent-coherence self-decay rate due to ER.  
+                $\small \Gamma^{SE}_{m,m-1}$ is the adjacent-coherence self-decay rate under the steady-state mean-field SE.
+                """
             )
     st.markdown(
         render_zeeman_properties_table_html(df_pop_display),
