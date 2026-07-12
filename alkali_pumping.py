@@ -2566,8 +2566,8 @@ with left:
             display: flex;
             flex-wrap: wrap;
             gap: 0.9rem;
-            margin-top: 0.2rem;
-            font-size: 0.80rem;
+            margin-top: 0rem;
+            font-size: 0.9rem;
             line-height: 1.35;
         }}
         .population-summary-item {{
