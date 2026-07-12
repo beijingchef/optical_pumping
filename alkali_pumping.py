@@ -1,4 +1,4 @@
-# alkali_pumping_v2.38.py
+# alkali_pumping_v3.1.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -8,7 +8,7 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v2.38.py
+#   streamlit run alkali_pumping_v3.1.py
 #
 # Model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + Gamma_ER (M_ER - I)] p
@@ -1417,11 +1417,60 @@ def spin_exchange_adjacent_coherence_self_relaxation_rates(
     return rates
 
 
+def mirror_state_indices(ground_states):
+    """Return indices implementing the transformation |F,m> -> |F,-m>."""
+    state_index = {
+        (float(state["F"]), float(state["m"])): idx
+        for idx, state in enumerate(ground_states)
+    }
+    return np.array([
+        state_index[(float(state["F"]), float(-state["m"]))]
+        for state in ground_states
+    ], dtype=int)
+
+
+def symmetrize_populations_under_m_inversion(populations, ground_states):
+    """Project a population vector onto the m -> -m symmetric subspace."""
+    p = np.asarray(populations, dtype=float).copy()
+    mirror = mirror_state_indices(ground_states)
+    p = 0.5 * (p + p[mirror])
+    p = np.clip(p, 0.0, None)
+    total = p.sum()
+    if total > 0:
+        p /= total
+    return p
+
+
+def generator_has_m_inversion_symmetry(L, ground_states, rtol=1e-10, atol=1e-12):
+    """Check whether the linear generator is invariant under m -> -m.
+
+    For the mirror permutation Q, symmetry requires Q L Q = L. This is true
+    for unpolarized relaxation and for optical pumping that does not distinguish
+    +m from -m, such as pure pi light or equal sigma+ and sigma- components.
+    """
+    mirror = mirror_state_indices(ground_states)
+    mirrored_L = np.asarray(L, dtype=float)[np.ix_(mirror, mirror)]
+    scale = max(1.0, float(np.max(np.abs(L))))
+    return bool(np.allclose(L, mirrored_L, rtol=rtol, atol=atol * scale))
+
+
 def steady_state_with_spin_exchange(L_linear, atom, ground_states, R_SE, max_iter=200, tol=1e-12):
-    """Solve the population steady state with nonlinear mean-field spin exchange."""
+    """Solve the population steady state with nonlinear mean-field spin exchange.
+
+    If the complete linear generator is invariant under m -> -m, the nonlinear
+    fixed-point iteration is explicitly kept in that symmetric subspace. This
+    prevents floating-point roundoff from selecting an arbitrary oriented branch
+    when the physical conditions contain no handedness.
+    """
     N = len(ground_states)
+    enforce_mirror_symmetry = generator_has_m_inversion_symmetry(
+        L_linear, ground_states
+    )
+
     if R_SE <= 0:
         p = steady_state_from_L(L_linear)
+        if enforce_mirror_symmetry:
+            p = symmetrize_populations_under_m_inversion(p, ground_states)
         M_SE, electron_marginal = build_spin_exchange_matrix(atom, ground_states, p)
         return p, {
             "M_SE": M_SE,
@@ -1430,9 +1479,12 @@ def steady_state_with_spin_exchange(L_linear, atom, ground_states, R_SE, max_ite
             "iterations": 0,
             "converged": True,
             "residual": float(np.max(np.abs(L_linear @ p))),
+            "mirror_symmetry_enforced": enforce_mirror_symmetry,
         }
 
     p = steady_state_from_L(L_linear)
+    if enforce_mirror_symmetry:
+        p = symmetrize_populations_under_m_inversion(p, ground_states)
     damping = 0.65
     converged = False
     residual = np.inf
@@ -1443,11 +1495,17 @@ def steady_state_with_spin_exchange(L_linear, atom, ground_states, R_SE, max_ite
         M_SE, electron_marginal = build_spin_exchange_matrix(atom, ground_states, p)
         L_eff = L_linear + R_SE * (M_SE - np.eye(N))
         p_new = steady_state_from_L(L_eff)
+        if enforce_mirror_symmetry:
+            p_new = symmetrize_populations_under_m_inversion(
+                p_new, ground_states
+            )
         diff = float(np.max(np.abs(p_new - p)))
         p = damping * p_new + (1.0 - damping) * p
         p = np.clip(p, 0.0, None)
         if p.sum() > 0:
             p /= p.sum()
+        if enforce_mirror_symmetry:
+            p = symmetrize_populations_under_m_inversion(p, ground_states)
 
         M_SE, electron_marginal = build_spin_exchange_matrix(atom, ground_states, p)
         residual_vec = L_linear @ p + R_SE * (M_SE @ p - p)
@@ -1471,6 +1529,7 @@ def steady_state_with_spin_exchange(L_linear, atom, ground_states, R_SE, max_ite
         "iterations": iteration,
         "converged": converged,
         "residual": residual,
+        "mirror_symmetry_enforced": enforce_mirror_symmetry,
     }
 
 
@@ -2102,7 +2161,7 @@ with st.sidebar:
             step=10.0,
             format="%.0f",
             key=rate_key,
-            help="Defined as the average depopulation rate for the selected transition of an unpolarized atom.",
+            help="Average depopulation rate for the selected transition of an unpolarized atom.",
         )
         k_axis = st.selectbox(
             "beam direction",
@@ -2321,6 +2380,7 @@ else:
         "iterations": 0,
         "converged": True,
         "residual": float(np.max(np.abs(L_linear @ p_ss))),
+        "mirror_symmetry_enforced": False,
     }
     L_total = L_linear
 
@@ -2429,6 +2489,13 @@ df_pop_display = df_pop_display[[
     "Γ^{ER}_{m,m-1} (s^-1)",
     "Γ^{SE}_{m,m-1} (s^-1)",
 ]]
+# Display the upper-F manifold first and order m from +F to -F
+# within each manifold.
+df_pop_display = df_pop_display.sort_values(
+    by=["F", "m"],
+    ascending=[False, False],
+    kind="stable",
+).reset_index(drop=True)
 
 
 # ============================================================
@@ -2448,17 +2515,112 @@ left, right = st.columns([0.62, 1.63], gap="small")
 with left:
     compact_section_title(f"{atom_name} ground-state populations")
 
-    fig, ax = plt.subplots(figsize=(4.6, 3.0))
-    ax.bar(labels, p_ss)
-    ax.set_ylabel("Population")
-    ax.set_xlabel(rf"$|F,m\rangle$ along {q_axis}")
-    ax.tick_params(axis="x", rotation=60)
+    # Separate the two ground-state hyperfine manifolds.  The manifold with
+    # the larger hyperfine energy is displayed in the upper panel.
+    manifold_energies = {}
+    for state in ground_states:
+        manifold_energies.setdefault(float(state["F"]), float(state["E"]))
+
+    manifolds_by_energy = sorted(
+        manifold_energies, key=lambda F_value: manifold_energies[F_value]
+    )
+    lower_F = manifolds_by_energy[0]
+    upper_F = manifolds_by_energy[-1]
+
+    fig, (ax_upper, ax_lower) = plt.subplots(
+        2, 1, figsize=(4.6, 4.5), sharey=True
+    )
+
+    for ax, F_value, panel_name in [
+        (ax_upper, upper_F, "Upper hyperfine level"),
+        (ax_lower, lower_F, "Lower hyperfine level"),
+    ]:
+        indices = [
+            index
+            for index, state in enumerate(ground_states)
+            if np.isclose(float(state["F"]), F_value)
+        ]
+        m_labels = [f"{ground_states[index]['m']:g}" for index in indices]
+        populations = [p_ss[index] for index in indices]
+
+        ax.bar(m_labels, populations)
+        ax.set_ylabel("Population")
+        ax.set_title(f"{panel_name}: F={F_value:g}", fontsize=10, pad=3)
+
+    population_axis_max = max(0.01, 1.08 * float(np.max(p_ss)))
+    ax_upper.set_ylim(0.0, population_axis_max)
+    ax_lower.set_ylim(0.0, population_axis_max)
+    ax_lower.set_xlabel(rf"$m$ along {q_axis}")
+
     fig.tight_layout()
     st.pyplot(fig, width="stretch")
 
-with right:
-    compact_section_title("Zeeman sublevel properties")
+    summary_sum_p = p_ss.sum()
+    summary_m = expectation_m(ground_states, p_ss)
+    summary_m2 = expectation_m2(ground_states, p_ss)
 
+    st.markdown(
+        f"""
+        <style>
+        .population-summary-row {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-top: 0.35rem;
+            font-size: 0.90rem;
+            line-height: 1.35;
+        }}
+        .population-summary-item {{
+            display: inline-flex;
+            align-items: baseline;
+            gap: 0.35rem;
+            white-space: nowrap;
+        }}
+        .population-summary-label {{
+            font-weight: 600;
+        }}
+        .population-summary-value {{
+            font-family: inherit;
+            font-size: inherit;
+            font-weight: 400;
+            font-variant-numeric: tabular-nums;
+        }}
+        </style>
+        <div class="population-summary-row">
+            <div class="population-summary-item">
+                <span class="population-summary-label">Σp =</span>
+                <span class="population-summary-value">{summary_sum_p:.4f}</span>
+            </div>
+            <div class="population-summary-item">
+                <span class="population-summary-label">〈m〉 =</span>
+                <span class="population-summary-value">{summary_m:.4f}</span>
+            </div>
+            <div class="population-summary-item">
+                <span class="population-summary-label">〈m²〉 =</span>
+                <span class="population-summary-value">{summary_m2:.4f}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with right:
+    title,tip = st.columns([0.9,0.1])
+    with title:
+        compact_section_title("Zeeman sublevel properties")     
+    with tip:
+        with st.popover("❓"):
+            st.markdown(
+                "Dₘ = Pₘ - Pₘ₋₁ is the population difference between adjacent Zeeman sublevels of the same F.  \n"
+                "Δν = νLSₘ - νLSₘ₋₁ is the adjacent-sublevel light-shift difference.  \n"
+                "Γ^{ER}_{m} is the signed net fractional ER rate of population; positive means loss.  \n" 
+                "Γ^{SE}_{m} is the signed net fractional SE rate of population at the steady state  \n"
+                "Aₘ is the repopulation rate into |F,m⟩ divided by its steady-state population: Aₘ = [Σₙ Wₘ←ₙ Pₙ]/Pₘ.  \n"
+                "Rₘ is the depopulation rate from |F,m⟩, summed over excited states and all active pump beams.  \n"
+                "Γ^R = (Rₘ + Rₘ₋₁)/2 is the pump-induced adjacent-coherence decay rate, and Γ^R/2π is the corresponding broadening.  \n"
+                "Γ^{ER}_{m,m-1} is the local adjacent-coherence self-decay rate due to ER.  \n"
+                "Γ^{SE}_{m,m-1} is the adjacent-coherence self-decay rate under the steady-state mean-field SE."
+            )
     st.markdown(
         render_zeeman_properties_table_html(df_pop_display),
         unsafe_allow_html=True,
@@ -2467,77 +2629,23 @@ with right:
         st.caption("νLS is shown because all active pump-beam light-shift Hamiltonians commute with the selected quantization-axis spin component.")
     else:
         st.caption("νLS is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
+
+
+
+# compact_section_title("D1/D2 hyperfine transition detunings")
+# st.caption(
+#     "Detunings are relative to the corresponding zero-pressure D1 or D2 fine-structure line center. "
+#     "Absolute optical frequencies are shown in MHz."
+# )
+with st.expander("D1/D2 hyperfine transition detunings", expanded=False):
     st.caption(
-        "Dₘ = Pₘ - Pₘ₋₁ is the population difference between adjacent Zeeman sublevels within the same F manifold.  \n"
-        "Δν = νLSₘ - νLSₘ₋₁ is the adjacent-sublevel light-shift difference.  \n"
-        "Γ^{ER}_{m} is the signed net fractional ER rate of population at the steady state; positive means loss and negative means replenishment.  \n" 
-        "Γ^{SE}_{m} is the signed net fractional SE rate of population at the steady state  \n"
-        "Aₘ is the optical repopulation rate into |F,m⟩ divided by its steady-state population: Aₘ = [Σₙ Wₘ←ₙ Pₙ]/Pₘ.  \n"
-        "Rₘ is the total optical depopulation rate of |F,m⟩, summed over excited states and all active pump beams.  \n"
-        "Γ^R = (Rₘ + Rₘ₋₁)/2 in s⁻¹, and Γ^R/2π reports the same relaxation rate in Hz.  \n"
-        "Γ^{ER}_{m,m-1} is the local adjacent coherence self-decay coefficient under the the steady-state ER channel.  \n"
-        "Γ^{SE}_{m,m-1} is the local adjacent-coherence self-decay coefficient under the steady-state mean-field SE channel."
+        "Detunings are relative to the corresponding zero-pressure D1 or D2 fine-structure line center. "
+        "Absolute optical frequencies are shown in MHz."
     )
-
-
-    summary_sum_p = p_ss.sum()
-    summary_m = expectation_m(ground_states, p_ss)
-    summary_m2 = expectation_m2(ground_states, p_ss)
     st.markdown(
-        f"""
-        <style>
-        .state-summary-row {{
-            display: flex;
-            flex-wrap: wrap;
-            gap: 1.5rem;
-            margin-top: 0.35rem;
-            font-size: 0.90rem;
-            line-height: 1.35;
-        }}
-        .state-summary-item {{
-            display: inline-flex;
-            align-items: baseline;
-            gap: 0.35rem;
-            white-space: nowrap;
-        }}
-        .state-summary-label {{
-            font-weight: 600;
-        }}
-        .state-summary-value {{
-            font-family: inherit;
-            font-size: inherit;
-            font-weight: 400;
-            font-variant-numeric: tabular-nums;
-        }}
-        </style>
-        <div class="state-summary-row">
-            <div class="state-summary-item">
-                <span class="state-summary-label">Σp =</span>
-                <span class="state-summary-value">{summary_sum_p:.8f}</span>
-            </div>
-            <div class="state-summary-item">
-                <span class="state-summary-label">〈m〉 =</span>
-                <span class="state-summary-value">{summary_m:.6f}</span>
-            </div>
-            <div class="state-summary-item">
-                <span class="state-summary-label">〈m²〉 =</span>
-                <span class="state-summary-value">{summary_m2:.6f}</span>
-            </div>
-        </div>
-        """,
+        render_transition_table_html(df_trans),
         unsafe_allow_html=True,
     )
-
-compact_section_title("D1/D2 hyperfine transition detunings")
-st.caption(
-    "Detunings are relative to the corresponding zero-pressure D1 or D2 fine-structure line center. "
-    "Absolute optical frequencies are shown in MHz. Blank pump-frequency cells mean that pump beam is on the other D line."
-)
-
-st.markdown(
-    render_transition_table_html(df_trans),
-    unsafe_allow_html=True,
-)
 
 if show_rate_matrices:
     with st.expander("Total rate matrix L", expanded=False):
@@ -2572,45 +2680,16 @@ with st.expander("Spin-exchange diagnostics", expanded=False):
         f"converged = {se_solver_info['converged']}; "
         f"max residual = {se_solver_info['residual']:.3e} s⁻¹."
     )
+    st.write(
+        "m→−m symmetry enforced in SE solve: "
+        f"{se_solver_info.get('mirror_symmetry_enforced', False)}."
+    )
     st.caption(
         "Spin exchange is included as a population-only mean-field collision map. "
         "It preserves the source atom's nuclear-spin marginal and replaces the "
         "electron spin by the ensemble electron-spin marginal, then projects back "
         "onto the displayed hyperfine populations. Coherences are not propagated."
     )
-
-with st.expander("Beam diagnostics", expanded=False):
-    if len(diagnostics) == 0:
-        st.info("Both optical pumping rates are zero.")
-    else:
-        for i, (b, info) in enumerate(diagnostics, start=1):
-            qtxt = ", ".join(
-                [f"q={q}: {w:.3f}" for q, w in info["q_weights"].items()]
-            )
-            st.markdown(f"**{b['name']}**")
-            st.write(
-                f"{b['line']}, k={b['k_axis']}, pol={b['pol']}"
-            )
-            st.write(f"Reference transition: {b['transition_label']}")
-            st.write(
-                f"Relative detuning = {b['detuning_relative']:.3f} MHz; "
-                f"absolute detuning from zero-pressure {b['line']} center = {b['detuning']:.3f} MHz"
-            )
-            st.write(f"Spherical weights relative to quantization axis {q_axis}: {qtxt}")
-            st.write(
-                f"Natural FWHM = {info['gamma_nat_MHz']:.3f} MHz; "
-                f"N2 broadening = {info['pressure_width_MHz']:.3f} MHz; "
-                f"total Lorentz FWHM = {info['lorentz_fwhm_MHz']:.3f} MHz"
-            )
-            st.write(
-                f"Doppler FWHM = {info['doppler_fwhm_MHz']:.3f} MHz; "
-                f"N2 pressure shift = {info['pressure_shift_MHz']:.3f} MHz"
-            )
-            if info.get("reference_Fg") is not None:
-                st.write(
-                    f"Rₚᵤₘₚ normalization: average total absorption from unpolarized "
-                    f"F={info['reference_Fg']:g} ground sublevels = {b['rate']:.6g} s⁻¹."
-                )
 
 with st.expander("Light-shift calculation", expanded=False):
     st.write(
