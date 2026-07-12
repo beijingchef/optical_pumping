@@ -2544,15 +2544,14 @@ with left:
         populations = [p_ss[index] for index in indices]
 
         ax.bar(m_labels, populations)
-        ax.set_ylabel("Population")
+        ax.set_ylabel("Population",fontsize=12)
         ax.set_title(f"{panel_name}: F={F_value:g}", fontsize=12, pad=3)
 
     population_axis_max = max(0.01, 1.08 * float(np.max(p_ss)))
     ax_upper.set_ylim(0.0, population_axis_max)
-    #ax_lower.set_xlim(-1.54, 2*lower_F+1.54)
     ax_lower.set_xlim(ax_upper.get_xlim()[0]-1, ax_upper.get_xlim()[1]-1)
     ax_lower.set_ylim(0.0, population_axis_max)
-    ax_lower.set_xlabel(rf"$m$ along {q_axis}")
+    ax_lower.set_xlabel(rf"$m$ along {q_axis}", fontsize=12)
 
     fig.tight_layout()
     st.pyplot(fig, width="stretch")
