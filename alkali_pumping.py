@@ -2549,8 +2549,9 @@ with left:
 
     population_axis_max = max(0.01, 1.08 * float(np.max(p_ss)))
     ax_upper.set_ylim(0.0, population_axis_max)
+    #ax_lower.set_xlim(-1.54, 2*lower_F+1.54)
+    ax_lower.set_xlim(ax_upper.get_xlim()[0]-1, ax_upper.get_xlim()[1]-1)
     ax_lower.set_ylim(0.0, population_axis_max)
-    ax_lower.set_xlim(-upper_F-0.5, upper_F+0.5)
     ax_lower.set_xlabel(rf"$m$ along {q_axis}")
 
     fig.tight_layout()
