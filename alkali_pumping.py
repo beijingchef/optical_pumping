@@ -2006,6 +2006,34 @@ with st.sidebar:
             padding-top: 0.15rem;
             padding-bottom: 0.15rem;
         }
+        
+                /* Input height */
+        div[data-baseweb="input"] > div {
+            min-height: 20px;
+            height: 20px;
+        }
+
+        /* Selectbox height */
+        div[data-baseweb="select"] > div {
+            min-height: 20px;
+            height: 20px;
+        }
+
+        /* Font size */
+        div[data-baseweb="input"] input {
+            font-size: 13px;
+        }
+
+        div[data-baseweb="select"] {
+            font-size: 13px;
+        }
+
+        /* Label */
+        .stNumberInput label,
+        .stSelectbox label {
+            font-size: 13px;
+        }
+        
         </style>
         """,
         unsafe_allow_html=True,
@@ -2021,7 +2049,6 @@ with st.sidebar:
     condition_controls_placeholder = st.empty()
 
     st.header("Atom / cell")
-
     atom_row_col1, atom_row_col2, atom_row_col3 = st.columns(3, gap="small")
     with atom_row_col1:
         atom_name = st.selectbox("Alkali atom", list(ATOMS.keys()), index=0, key="atom_name")
