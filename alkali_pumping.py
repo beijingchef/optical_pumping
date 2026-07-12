@@ -2468,26 +2468,17 @@ with right:
     else:
         st.caption("νLS is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
     st.caption(
-        "Dₘ = Pₘ − Pₘ₋₁ is the population difference between adjacent Zeeman "
-        "sublevels within the same F manifold. Aₘ is the optical repopulation "
-        "rate into |F,m⟩ divided by its steady-state population: "
-        "Aₘ = [Σₙ Wₘ←ₙ Pₙ]/Pₘ. Δν = νLS,m − νLS,m−1 is the adjacent-sublevel "
-        "light-shift frequency difference. These adjacent-state quantities are "
-        "blank for the lowest-m state of each F manifold."
+        "Dₘ = Pₘ - Pₘ₋₁ is the population difference between adjacent Zeeman sublevels within the same F manifold.  \n"
+        "Γ^{ER}_{m} is the signed net fractional ER rate evaluated at the steady state; positive means  population loss and negative means population replenishment.  \n" 
+        "Γ^{SE}_{m} is the signed net fractional SE rate at the final steady state  \n"
+        "Aₘ is the optical repopulation rate into |F,m⟩ divided by its steady-state population: Aₘ = [Σₙ Wₘ←ₙ Pₙ]/Pₘ.  \n"
+        "Δν = νLS,m − νLS,m−1 is the adjacent-sublevel light-shift difference.  \n"
+        "Rₘ is the total optical excitation/depopulation rate of |F,m⟩, summed over excited states and all active pump beams.  \n"
+        "Γ^R = (Rₘ + Rₘ₋₁)/2 in s⁻¹, and Γ^R/2π reports the same relaxation rate in Hz.  \n"
+        "Γ^{ER}_{m,m-1} is the self-decay coefficient of an infinitesimal adjacent coherence perturbation under the ER channel.  \n"
+        "Γ^{SE}_{m,m-1} is the corresponding local adjacent-coherence self-decay coefficient under the steady-state mean-field SE channel."
     )
-    st.caption(
-        "Rₘ is the total optical excitation/depopulation rate of |F,m⟩, "
-        "summed over excited states and all active pump beams. Γ^R reports "
-        "(Rₘ + Rₘ₋₁)/2 in s⁻¹, and Γ^R/2π reports the same relaxation rate "
-        "in Hz. Γ^{ER}_{m} is "
-        "the signed net fractional ER rate evaluated at the final steady state; "
-        "positive means ER removes population and negative means ER replenishes it. "
-        "Γ^{ER}_{m,m-1} is the self-decay coefficient of an infinitesimal adjacent "
-        "coherence perturbation under the ER channel. Γ^{SE}_{m} is the signed "
-        "net fractional spin-exchange rate at the final steady state, and "
-        "Γ^{SE}_{m,m-1} is the corresponding local adjacent-coherence self-decay "
-        "coefficient under the steady-state mean-field SE channel."
-    )
+
 
     summary_sum_p = p_ss.sum()
     summary_m = expectation_m(ground_states, p_ss)
