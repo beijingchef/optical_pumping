@@ -1,4 +1,4 @@
-# alkali_pumping_v3.1.py
+# alkali_pumping_v3.8.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -8,7 +8,7 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v3.1.py
+#   streamlit run alkali_pumping_v3.8.py
 #
 # Model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + Gamma_ER (M_ER - I)] p
@@ -1073,7 +1073,7 @@ def light_shift_is_diagonal_for_beam(k_axis, pol, q_axis, tolerance=1e-9):
     return max(q_weights.values()) >= 1.0 - tolerance
 
 
-def total_light_shift_Hz_from_diagnostics(ground_states, beam_inputs, diagnostics):
+def total_nu_LS_from_diagnostics(ground_states, beam_inputs, diagnostics):
     """Calculate diagonal light shifts for all ground states.
 
     The optical pumping rates are proportional to the real part of the complex
@@ -1097,8 +1097,8 @@ def total_light_shift_Hz_from_diagnostics(ground_states, beam_inputs, diagnostic
         # complex-Voigt light shift calculated in build_optical_L().
         shift_angular += np.sum(info["light_shift_ge_angular"], axis=1)
 
-    shift_Hz = shift_angular / (2.0 * np.pi)
-    return shift_Hz, True
+    nu_LS = shift_angular / (2.0 * np.pi)
+    return nu_LS, True
 
 
 # ============================================================
@@ -1201,7 +1201,7 @@ def er_population_fractional_relaxation_rates(M_ER, p_steady, gamma_ER):
 
     The reported rate is
 
-        Gamma_a^(ER,net) = -(d p_a / dt)_ER / p_a.
+        R_a^(ER) = -(d p_a / dt)_ER / p_a.
 
     Positive values mean ER removes population from the state; negative values
     mean ER replenishes it. States with numerically zero population are blank.
@@ -1342,7 +1342,7 @@ def spin_exchange_population_fractional_relaxation_rates(M_SE, p_steady, R_SE):
 
     The reported rate is
 
-        Gamma_a^(SE,net) = -(d p_a / dt)_SE / p_a.
+        R_a^(SE) = -(d p_a / dt)_SE / p_a.
 
     Positive values mean spin exchange removes population from the state;
     negative values mean spin exchange replenishes it. States with numerically
@@ -1591,40 +1591,40 @@ def add_population_difference_column(df_pop):
     return df
 
 
-def add_light_shift_difference_column(df_pop):
-    """Add nu_m - nu_{m-1} within each ground hyperfine manifold F.
+def add_nu_m_column(df_pop):
+    """Add nu_m = nu^(LS)_m - nu^(LS)_(m-1) within each ground hyperfine manifold F.
 
-    The light-shift frequency is in Hz. The lowest m state in each F manifold has
+    The state-resolved light-shift frequency nu^(LS) is in Hz. The lowest m state in each F manifold has
     no adjacent lower-m partner, so its difference is left blank.
     """
     df = df_pop.copy()
-    df["light_shift_difference_Hz"] = np.nan
+    df["nu_m"] = np.nan
 
-    if "light_shift_Hz" not in df.columns:
+    if "nu_LS" not in df.columns:
         return df
 
     for F_value, group in df.groupby("F", sort=False):
         group_sorted = group.sort_values("m")
-        nu_by_m = dict(zip(group_sorted["m"], group_sorted["light_shift_Hz"]))
+        nu_by_m = dict(zip(group_sorted["m"], group_sorted["nu_LS"]))
         for row_index, row in group_sorted.iterrows():
             m_value = row["m"]
             previous_m = m_value - 1.0
             if previous_m in nu_by_m:
-                current_nu = row["light_shift_Hz"]
+                current_nu = row["nu_LS"]
                 previous_nu = nu_by_m[previous_m]
                 if pd.notna(current_nu) and pd.notna(previous_nu):
-                    df.loc[row_index, "light_shift_difference_Hz"] = current_nu - previous_nu
+                    df.loc[row_index, "nu_m"] = current_nu - previous_nu
 
     return df
 
 
-def total_pumping_rate_by_ground_state(ground_states, diagnostics):
-    """Return R_m for every displayed |F,m> ground state.
+def total_R_OP_by_ground_state(ground_states, diagnostics):
+    """Return R^OP for every displayed |F,m> ground state.
 
     For each active beam, R_ge[ground, excited] is the state-resolved optical
     excitation rate after the beam intensity has been normalized to its selected
     reference-transition pumping rate. Summing over all excited states and all
-    active beams gives the total optical depopulation rate R_m of each ground
+    active beams gives the total optical depopulation rate R^OP of each ground
     Zeeman sublevel.
     """
     rates = np.zeros(len(ground_states), dtype=float)
@@ -1636,77 +1636,77 @@ def total_pumping_rate_by_ground_state(ground_states, diagnostics):
     return rates
 
 
-def optical_repopulation_fractional_rates(
-    optical_generator, populations, pumping_rates_s, population_floor=1e-15
+def optical_Lambda_fractional_rates(
+    optical_generator, populations, R_OP_values, population_floor=1e-15
 ):
-    """Return the optical repopulation rate A_m for each ground state.
+    """Return the optical repopulation rate Lambda for each ground state.
 
     The optical generator can be decomposed as
 
-        L_op = W_rep - diag(R),
+        L_op = W_rep - diag(R_OP),
 
-    where R_m is the total excitation/depopulation rate from state m and
+    where R^OP is the total excitation/depopulation rate from state m and
     W_rep contains spontaneous-emission repopulation into the ground states,
     including return to the same ground state. At the supplied population
     distribution p, the repopulation flow into state m is (W_rep p)_m.
 
     The table reports the corresponding fractional repopulation rate
 
-        A_m = (W_rep p)_m / p_m,
+        Lambda = (W_rep p)_m / p_m,
 
     in s^-1, so that the signed net optical fractional population relaxation
-    rate is R_m - A_m. States with negligible population are left blank.
+    rate is R^OP - Lambda. States with negligible population are left blank.
     """
     L_op = np.asarray(optical_generator, dtype=float)
     p = np.asarray(populations, dtype=float)
-    R = np.asarray(pumping_rates_s, dtype=float)
+    R_OP = np.asarray(R_OP_values, dtype=float)
 
-    if L_op.shape != (len(p), len(p)) or R.shape != p.shape:
+    if L_op.shape != (len(p), len(p)) or R_OP.shape != p.shape:
         raise ValueError("Incompatible dimensions in optical repopulation calculation.")
 
-    W_rep = L_op + np.diag(R)
+    W_rep = L_op + np.diag(R_OP)
     repopulation_flow = W_rep @ p
     # Remove only tiny negative roundoff; physical repopulation flow is nonnegative.
     repopulation_flow[np.abs(repopulation_flow) < 1e-14] = 0.0
 
-    A = np.full_like(p, np.nan, dtype=float)
+    Lambda = np.full_like(p, np.nan, dtype=float)
     mask = p > population_floor
-    A[mask] = repopulation_flow[mask] / p[mask]
-    return A
+    Lambda[mask] = repopulation_flow[mask] / p[mask]
+    return Lambda
 
 
-def add_adjacent_pumping_relaxation_columns(df_pop):
-    """Add Gamma^R and Gamma^R/(2 pi) for adjacent Zeeman coherences.
+def add_adjacent_optical_relaxation_columns(df_pop):
+    """Add Gamma^OP and Gamma^OP/(2 pi) for adjacent Zeeman coherences.
 
     For the adjacent coherence rho_{m,m-1}, direct optical depopulation gives
 
-        Gamma^R = (R_m + R_{m-1}) / 2
+        Gamma^OP = (R^OP_m + R^OP_{m-1}) / 2
 
     in s^-1. The corresponding ordinary-frequency linewidth is
-    Gamma^R/(2 pi) in Hz. The lowest-m state in each F manifold has no adjacent
+    Gamma^OP/(2 pi) in Hz. The lowest-m state in each F manifold has no adjacent
     lower-m partner, so both entries are blank there.
     """
     df = df_pop.copy()
-    rate_column = "adjacent_pumping_relaxation_s"
-    hz_column = "adjacent_pumping_relaxation_Hz"
+    rate_column = "Gamma_OP"
+    hz_column = "Gamma_OP_over_2pi"
     df[rate_column] = np.nan
     df[hz_column] = np.nan
 
-    if "pumping_rate_s" not in df.columns:
+    if "R_OP" not in df.columns:
         return df
 
     for _F_value, group in df.groupby("F", sort=False):
         group_sorted = group.sort_values("m")
-        rate_by_m = dict(zip(group_sorted["m"], group_sorted["pumping_rate_s"]))
+        rate_by_m = dict(zip(group_sorted["m"], group_sorted["R_OP"]))
         for row_index, row in group_sorted.iterrows():
             m_value = row["m"]
             previous_m = m_value - 1.0
             if previous_m in rate_by_m:
-                gamma_R = 0.5 * (
-                    row["pumping_rate_s"] + rate_by_m[previous_m]
+                Gamma_OP = 0.5 * (
+                    row["R_OP"] + rate_by_m[previous_m]
                 )
-                df.loc[row_index, rate_column] = gamma_R
-                df.loc[row_index, hz_column] = gamma_R / (2.0 * np.pi)
+                df.loc[row_index, rate_column] = Gamma_OP
+                df.loc[row_index, hz_column] = Gamma_OP / (2.0 * np.pi)
 
     return df
 
@@ -1837,16 +1837,16 @@ def render_zeeman_properties_table_html(df):
         ("P_F", "P<sub>F</sub>", None, ".3f"),
         ("Pₘ", "P<sub>m</sub>", None, ".3f"),
         ("Dₘ", "D<sub>m</sub>", None, ".3f"),
-        ("νLS (Hz)", "ν<sup>LS</sup>", "Hz", ".1f"),
-        ("Δν (Hz)", "Δν", "Hz", ".1f"),
-        ("Γ^{ER}_{m} (s^-1)", "Γ<sup>ER</sup><sub>m</sub>", "s<sup>−1</sup>", ".2f"),
-        ("Γ^{SE}_{m} (s^-1)", "Γ<sup>SE</sup><sub>m</sub>", "s<sup>−1</sup>", ".2f"),
-        ("Aₘ (s⁻¹)", "A<sub>m</sub>", "s<sup>−1</sup>", ".1f"),
-        ("Rₘ (s⁻¹)", "R<sub>m</sub>", "s<sup>−1</sup>", ".1f"),
-        ("Γ^R (s^-1)", "Γ<sup>R</sup>", "s<sup>−1</sup>", ".1f"),
-        ("Γ^R/2π (Hz)", "Γ<sup>R</sup>/2π", "Hz", ".1f"),
-        ("Γ^{ER}_{m,m-1} (s^-1)", "Γ<sup>ER</sup><sub>m,m−1</sub>", "s<sup>−1</sup>", ".2f"),
-        ("Γ^{SE}_{m,m-1} (s^-1)", "Γ<sup>SE</sup><sub>m,m−1</sub>", "s<sup>−1</sup>", ".2f"),
+        ("ν^{LS} (Hz)", "ν<sup>LS</sup>", "Hz", ".1f"),
+        ("ν_m (Hz)", "ν<sub>m</sub>", "Hz", ".1f"),
+        ("Λ (s⁻¹)", "Λ", "s<sup>−1</sup>", ".1f"),
+        ("R^{OP} (s^-1)", "R<sup>OP</sup>", "s<sup>−1</sup>", ".1f"),
+        ("Γ^{OP} (s^-1)", "Γ<sup>OP</sup>", "s<sup>−1</sup>", ".1f"),
+        ("Γ^{OP}/2π (Hz)", "Γ<sup>OP</sup>/2π", "Hz", ".1f"),
+        ("R^{ER} (s^-1)", "R<sup>ER</sup>", "s<sup>−1</sup>", ".2f"),
+        ("R^{SE} (s^-1)", "R<sup>SE</sup>", "s<sup>−1</sup>", ".2f"),
+        ("Γ^{ER} (s^-1)", "Γ<sup>ER</sup>", "s<sup>−1</sup>", ".2f"),
+        ("Γ^{SE} (s^-1)", "Γ<sup>SE</sup>", "s<sup>−1</sup>", ".2f"),
     ]
 
     def fmt(value, spec):
@@ -2411,32 +2411,32 @@ else:
     }
     L_total = L_linear
 
-light_shift_Hz, light_shift_available = total_light_shift_Hz_from_diagnostics(
+nu_LS, light_shift_available = total_nu_LS_from_diagnostics(
     ground_states,
     beam_inputs,
     diagnostics,
 )
-pumping_rate_by_state_s = total_pumping_rate_by_ground_state(
+R_OP_by_state = total_R_OP_by_ground_state(
     ground_states,
     diagnostics,
 )
-optical_repopulation_rate_by_state_s = optical_repopulation_fractional_rates(
+Lambda_by_state = optical_Lambda_fractional_rates(
     L_optical,
     p_ss,
-    pumping_rate_by_state_s,
+    R_OP_by_state,
 )
 
-er_population_relaxation_s = er_population_fractional_relaxation_rates(
+R_ER_net = er_population_fractional_relaxation_rates(
     M_ER, p_ss, gamma_ER
 )
-er_adjacent_coherence_relaxation_s = er_adjacent_coherence_self_relaxation_rates(
+Gamma_ER = er_adjacent_coherence_self_relaxation_rates(
     atom, ground_states, gamma_ER
 )
 
-se_population_relaxation_s = spin_exchange_population_fractional_relaxation_rates(
+R_SE_net = spin_exchange_population_fractional_relaxation_rates(
     se_solver_info["M_SE"], p_ss, R_SE
 )
-se_adjacent_coherence_relaxation_s = (
+Gamma_SE = (
     spin_exchange_adjacent_coherence_self_relaxation_rates(
         atom,
         ground_states,
@@ -2449,17 +2449,17 @@ df_pop = pd.DataFrame({
     "F": [g["F"] for g in ground_states],
     "m": [g["m"] for g in ground_states],
     "population": p_ss,
-    "light_shift_Hz": light_shift_Hz,
-    "optical_repopulation_rate_s": optical_repopulation_rate_by_state_s,
-    "pumping_rate_s": pumping_rate_by_state_s,
-    "er_population_relaxation_s": er_population_relaxation_s,
-    "er_adjacent_coherence_relaxation_s": er_adjacent_coherence_relaxation_s,
-    "se_population_relaxation_s": se_population_relaxation_s,
-    "se_adjacent_coherence_relaxation_s": se_adjacent_coherence_relaxation_s,
+    "nu_LS": nu_LS,
+    "Lambda": Lambda_by_state,
+    "R_OP": R_OP_by_state,
+    "R_ER_net": R_ER_net,
+    "Gamma_ER": Gamma_ER,
+    "R_SE_net": R_SE_net,
+    "Gamma_SE": Gamma_SE,
 })
 df_pop = add_population_difference_column(df_pop)
-df_pop = add_light_shift_difference_column(df_pop)
-df_pop = add_adjacent_pumping_relaxation_columns(df_pop)
+df_pop = add_nu_m_column(df_pop)
+df_pop = add_adjacent_optical_relaxation_columns(df_pop)
 
 df_F = population_by_F(df_pop)
 
@@ -2487,34 +2487,34 @@ df_pop_display = df_pop.rename(columns={
     "hyperfine_population": "P_F",
     "population": "Pₘ",
     "population_difference": "Dₘ",
-    "light_shift_Hz": "νLS (Hz)",
-    "light_shift_difference_Hz": "Δν (Hz)",
-    "optical_repopulation_rate_s": "Aₘ (s⁻¹)",
-    "pumping_rate_s": "Rₘ (s⁻¹)",
-    "adjacent_pumping_relaxation_s": "Γ^R (s^-1)",
-    "adjacent_pumping_relaxation_Hz": "Γ^R/2π (Hz)",
-    "er_population_relaxation_s": "Γ^{ER}_{m} (s^-1)",
-    "er_adjacent_coherence_relaxation_s": "Γ^{ER}_{m,m-1} (s^-1)",
-    "se_population_relaxation_s": "Γ^{SE}_{m} (s^-1)",
-    "se_adjacent_coherence_relaxation_s": "Γ^{SE}_{m,m-1} (s^-1)",
+    "nu_LS": "ν^{LS} (Hz)",
+    "nu_m": "ν_m (Hz)",
+    "Lambda": "Λ (s⁻¹)",
+    "R_OP": "R^{OP} (s^-1)",
+    "Gamma_OP": "Γ^{OP} (s^-1)",
+    "Gamma_OP_over_2pi": "Γ^{OP}/2π (Hz)",
+    "R_ER_net": "R^{ER} (s^-1)",
+    "Gamma_ER": "Γ^{ER} (s^-1)",
+    "R_SE_net": "R^{SE} (s^-1)",
+    "Gamma_SE": "Γ^{SE} (s^-1)",
 })
-# Place the ER and SE population rates immediately before A_m, then R_m and the adjacent-coherence columns.
+# Place R^ER and R^SE immediately before Gamma^ER.
 df_pop_display = df_pop_display[[
     "F",
     "m",
     "P_F",
     "Pₘ",
     "Dₘ",
-    "νLS (Hz)",
-    "Δν (Hz)",
-    "Γ^{ER}_{m} (s^-1)",
-    "Γ^{SE}_{m} (s^-1)",
-    "Aₘ (s⁻¹)",
-    "Rₘ (s⁻¹)",
-    "Γ^R (s^-1)",
-    "Γ^R/2π (Hz)",
-    "Γ^{ER}_{m,m-1} (s^-1)",
-    "Γ^{SE}_{m,m-1} (s^-1)",
+    "ν^{LS} (Hz)",
+    "ν_m (Hz)",
+    "Λ (s⁻¹)",
+    "R^{OP} (s^-1)",
+    "Γ^{OP} (s^-1)",
+    "Γ^{OP}/2π (Hz)",
+    "R^{ER} (s^-1)",
+    "R^{SE} (s^-1)",
+    "Γ^{ER} (s^-1)",
+    "Γ^{SE} (s^-1)",
 ]]
 # Display the upper-F manifold first and order m from +F to -F
 # within each manifold.
@@ -2641,14 +2641,14 @@ with right:
             st.markdown(
                 r"""
                 $\small D_m=P_m-P_{m-1}$ is the population difference between adjacent Zeeman sublevels.  
-                $\small \Delta\nu=\nu^{LS}_{m}-\nu^{LS}_{m-1}$ is the adjacent-sublevel light-shift difference.  
-                $\small\Gamma^{ER}_{m}$ is the signed net fractional ER rate of population; positive means loss.  
-                $\small \Gamma^{SE}_{m}$ is the signed net fractional SE rate of population at the steady state.  
-                $\small A_m$ is the repopulation rate into $\small \lvert F,m\rangle$ divided by its steady-state population.  
-                $\small R_m$ is the depopulation rate from $\small\lvert F,m\rangle$, summed over excited states and all active pump beams.  
-                $\small \Gamma^R=(R_m+R_{m-1})/2$ is the pump-induced adjacent-coherence decay rate, and $\small \Gamma^R/2\pi$ is the corresponding broadening.  
-                $\small \Gamma^{ER}_{m,m-1}$ is the local adjacent-coherence self-decay rate due to ER.  
-                $\small \Gamma^{SE}_{m,m-1}$ is the adjacent-coherence self-decay rate under the steady-state mean-field SE.
+                $\small \nu_m=\nu^{\mathrm{LS}}_{m}-\nu^{\mathrm{LS}}_{m-1}$ is the adjacent-sublevel light-shift difference.  
+                $\small R^{\mathrm{ER}}$ is the signed net fractional ER rate of population; positive means loss.  
+                $\small R^{\mathrm{SE}}$ is the signed net fractional SE rate of population at the steady state.  
+                $\small \Lambda$ is the repopulation rate into $\small \lvert F,m\rangle$ divided by its steady-state population.  
+                $\small R^{\mathrm{OP}}$ is the depopulation rate from $\small\lvert F,m\rangle$, summed over excited states and all active pump beams.  
+                $\small \Gamma^{\mathrm{OP}}=(R^{\mathrm{OP}}_m+R^{\mathrm{OP}}_{m-1})/2$ is the pump-induced adjacent-coherence decay rate, and $\small \Gamma^{\mathrm{OP}}/2\pi$ is the corresponding broadening.  
+                $\small \Gamma^{\mathrm{ER}}$ is the local adjacent-coherence self-decay rate due to ER for the row-associated coherence.  
+                $\small \Gamma^{\mathrm{SE}}$ is the adjacent-coherence self-decay rate under the steady-state mean-field SE for the row-associated coherence.
                 """
             )
     st.markdown(
@@ -2656,9 +2656,9 @@ with right:
         unsafe_allow_html=True,
     )
     if light_shift_available:
-        st.caption("νLS is shown because all active pump-beam light-shift Hamiltonians commute with the selected quantization-axis spin component.")
+        st.caption(r"$\nu^{\mathrm{LS}}$ is shown because all active pump-beam light-shift Hamiltonians commute with the selected quantization-axis spin component.")
     else:
-        st.caption("νLS is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
+        st.caption(r"$\nu^{\mathrm{LS}}$ is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
 
 
 
@@ -2722,12 +2722,14 @@ with st.expander("Spin-exchange diagnostics", expanded=False):
     )
 
 with st.expander("Light-shift calculation", expanded=False):
-    st.write(
-        "The light-shift column is calculated only when every active pump beam has "
-        "a single spherical polarization component q=-1, 0, or +1 relative to the "
-        "selected quantization axis. In that case the AC-Stark Hamiltonian is "
-        "diagonal in the displayed |F,m> basis and commutes with the spin component "
-        "along the quantization axis."
+    st.markdown(
+        r"""
+        The light-shift column is calculated only when every active pump beam has
+        a single spherical polarization component $q=-1,0,+1$ relative to the
+        selected quantization axis. In that case the AC-Stark Hamiltonian is
+        diagonal in the displayed $\lvert F,m\rangle$ basis and commutes with the
+        spin component along the quantization axis.
+        """
     )
     st.latex(
         r"""
@@ -2747,11 +2749,16 @@ with st.expander("Light-shift calculation", expanded=False):
         {\sigma_D\sqrt{2}}
         """
     )
-    st.write(
-        "The table reports νLS = δω/(2π) in Hz and νₘ − νₘ₋₁ in Hz. The sum over excited states gives "
-        "the total diagonal AC-Stark shift, including scalar, vector, and tensor "
-        "contributions. In the zero-Doppler or far-wing limit this reduces to "
-        "δω = R Δ/Γ_L. This small shift is not fed back into the optical detunings."
+    st.markdown(
+        r"""
+        The table reports $\nu^{\mathrm{LS}}=\delta\omega/(2\pi)$ in Hz and
+        $\nu_m=\nu^{\mathrm{LS}}_m-\nu^{\mathrm{LS}}_{m-1}$ in Hz. The sum over
+        excited states gives the total diagonal AC-Stark shift, including scalar,
+        vector, and tensor contributions. In the zero-Doppler or far-wing limit,
+        this reduces to
+        $\delta\omega=R^{\mathrm{OP}}\Delta/\Gamma_L$.
+        This small shift is not fed back into the optical detunings.
+        """
     )
 
 
