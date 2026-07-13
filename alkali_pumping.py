@@ -1,4 +1,4 @@
-# alkali_pumping_v3.8.py
+# alkali_pumping_v3.14.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -8,10 +8,10 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v3.8.py
+#   streamlit run alkali_pumping_v3.14.py
 #
 # Model:
-#   dp/dt = [L_op,1 + L_op,2 + L_op,3 + Gamma_ER (M_ER - I)] p
+#   dp/dt = [L_op,1 + L_op,2 + L_op,3 + R_ER (M_ER - I)] p
 #          + R_SE(T) [M_SE[p] - I] p
 #
 # The app is population-only. It does not keep Zeeman coherences, excited-state
@@ -622,7 +622,6 @@ def hyperfine_transition_table(
                     "nu_D_absolute": line_center_MHz,
                     "detuning_zero_pressure": det0,
                     "N2_shift": pressure_shift,
-                    "detuning_with_N2": detP,
                     "transition_frequency_with_N2": transition_abs_MHz,
                     "pump_1_frequency": pump1_abs_MHz,
                     "pump_2_frequency": pump2_abs_MHz,
@@ -1192,29 +1191,29 @@ def coupled_basis_amplitudes(atom, ground_states):
     return amplitudes
 
 
-def er_population_fractional_relaxation_rates(M_ER, p_steady, gamma_ER):
+def er_population_fractional_relaxation_rates(M_ER, p_steady, R_ER):
     """Return the signed ER fractional rate of each steady-state population.
 
     For a diagonal steady-state density matrix,
 
-        (d p_a / dt)_ER = gamma_ER [(M_ER p)_a - p_a].
+        (d p_a / dt)_ER = R_ER [(M_ER p)_a - p_a].
 
     The reported rate is
 
-        R_a^(ER) = -(d p_a / dt)_ER / p_a.
+        G_a^(ER) = -(d p_a / dt)_ER / p_a.
 
     Positive values mean ER removes population from the state; negative values
     mean ER replenishes it. States with numerically zero population are blank.
     """
     p = np.asarray(p_steady, dtype=float)
-    er_derivative = float(gamma_ER) * (np.asarray(M_ER, dtype=float) @ p - p)
+    er_derivative = float(R_ER) * (np.asarray(M_ER, dtype=float) @ p - p)
     rates = np.full_like(p, np.nan, dtype=float)
     populated = p > 1e-15
     rates[populated] = -er_derivative[populated] / p[populated]
     return rates
 
 
-def er_adjacent_coherence_self_relaxation_rates(atom, ground_states, gamma_ER):
+def er_adjacent_coherence_self_relaxation_rates(atom, ground_states, R_ER):
     """Return ER self-decay rates for infinitesimal rho_(m,m-1) coherences.
 
     The electron-randomization channel is
@@ -1226,7 +1225,7 @@ def er_adjacent_coherence_self_relaxation_rates(atom, ground_states, gamma_ER):
 
         k_ab = <a| E_ER(|a><b|) |b>,
 
-    and reports gamma_ER (1-k_ab). ER can also couple coherences with the same
+    and reports R_ER (1-k_ab). ER can also couple coherences with the same
     Delta m, so this is the local/self-decay coefficient of an infinitesimal
     coherence perturbation about the final diagonal steady state.
     """
@@ -1252,7 +1251,7 @@ def er_adjacent_coherence_self_relaxation_rates(atom, ground_states, gamma_ER):
 
         # Project (rho_I tensor I_S/2) back onto <a| ... |b>.
         self_retention = 0.5 * np.einsum("is,ij,js->", C_a, rho_I, C_b)
-        rates[a_idx] = float(gamma_ER) * (1.0 - float(self_retention))
+        rates[a_idx] = float(R_ER) * (1.0 - float(self_retention))
 
     return rates
 
@@ -1342,7 +1341,7 @@ def spin_exchange_population_fractional_relaxation_rates(M_SE, p_steady, R_SE):
 
     The reported rate is
 
-        R_a^(SE) = -(d p_a / dt)_SE / p_a.
+        G_a^(SE) = -(d p_a / dt)_SE / p_a.
 
     Positive values mean spin exchange removes population from the state;
     negative values mean spin exchange replenishes it. States with numerically
@@ -1618,13 +1617,13 @@ def add_nu_m_column(df_pop):
     return df
 
 
-def total_R_OP_by_ground_state(ground_states, diagnostics):
-    """Return R^OP for every displayed |F,m> ground state.
+def total_G_OP_by_ground_state(ground_states, diagnostics):
+    """Return G^OP for every displayed |F,m> ground state.
 
     For each active beam, R_ge[ground, excited] is the state-resolved optical
     excitation rate after the beam intensity has been normalized to its selected
     reference-transition pumping rate. Summing over all excited states and all
-    active beams gives the total optical depopulation rate R^OP of each ground
+    active beams gives the total optical depopulation rate G^OP of each ground
     Zeeman sublevel.
     """
     rates = np.zeros(len(ground_states), dtype=float)
@@ -1637,15 +1636,15 @@ def total_R_OP_by_ground_state(ground_states, diagnostics):
 
 
 def optical_Lambda_fractional_rates(
-    optical_generator, populations, R_OP_values, population_floor=1e-15
+    optical_generator, populations, G_OP_values, population_floor=1e-15
 ):
     """Return the optical repopulation rate Lambda for each ground state.
 
     The optical generator can be decomposed as
 
-        L_op = W_rep - diag(R_OP),
+        L_op = W_rep - diag(G_OP),
 
-    where R^OP is the total excitation/depopulation rate from state m and
+    where G^OP is the total excitation/depopulation rate from state m and
     W_rep contains spontaneous-emission repopulation into the ground states,
     including return to the same ground state. At the supplied population
     distribution p, the repopulation flow into state m is (W_rep p)_m.
@@ -1655,16 +1654,16 @@ def optical_Lambda_fractional_rates(
         Lambda = (W_rep p)_m / p_m,
 
     in s^-1, so that the signed net optical fractional population relaxation
-    rate is R^OP - Lambda. States with negligible population are left blank.
+    rate is G^OP - Lambda. States with negligible population are left blank.
     """
     L_op = np.asarray(optical_generator, dtype=float)
     p = np.asarray(populations, dtype=float)
-    R_OP = np.asarray(R_OP_values, dtype=float)
+    G_OP = np.asarray(G_OP_values, dtype=float)
 
-    if L_op.shape != (len(p), len(p)) or R_OP.shape != p.shape:
+    if L_op.shape != (len(p), len(p)) or G_OP.shape != p.shape:
         raise ValueError("Incompatible dimensions in optical repopulation calculation.")
 
-    W_rep = L_op + np.diag(R_OP)
+    W_rep = L_op + np.diag(G_OP)
     repopulation_flow = W_rep @ p
     # Remove only tiny negative roundoff; physical repopulation flow is nonnegative.
     repopulation_flow[np.abs(repopulation_flow) < 1e-14] = 0.0
@@ -1680,7 +1679,7 @@ def add_adjacent_optical_relaxation_columns(df_pop):
 
     For the adjacent coherence rho_{m,m-1}, direct optical depopulation gives
 
-        Gamma^OP = (R^OP_m + R^OP_{m-1}) / 2
+        Gamma^OP = (G^OP_m + G^OP_{m-1}) / 2
 
     in s^-1. The corresponding ordinary-frequency linewidth is
     Gamma^OP/(2 pi) in Hz. The lowest-m state in each F manifold has no adjacent
@@ -1692,18 +1691,18 @@ def add_adjacent_optical_relaxation_columns(df_pop):
     df[rate_column] = np.nan
     df[hz_column] = np.nan
 
-    if "R_OP" not in df.columns:
+    if "G_OP" not in df.columns:
         return df
 
     for _F_value, group in df.groupby("F", sort=False):
         group_sorted = group.sort_values("m")
-        rate_by_m = dict(zip(group_sorted["m"], group_sorted["R_OP"]))
+        rate_by_m = dict(zip(group_sorted["m"], group_sorted["G_OP"]))
         for row_index, row in group_sorted.iterrows():
             m_value = row["m"]
             previous_m = m_value - 1.0
             if previous_m in rate_by_m:
                 Gamma_OP = 0.5 * (
-                    row["R_OP"] + rate_by_m[previous_m]
+                    row["G_OP"] + rate_by_m[previous_m]
                 )
                 df.loc[row_index, rate_column] = Gamma_OP
                 df.loc[row_index, hz_column] = Gamma_OP / (2.0 * np.pi)
@@ -1729,9 +1728,8 @@ def render_transition_table_html(df):
         ("Fg", "F<sub>g</sub>", None, "text"),
         ("F'", "F′", None, "text"),
         ("nu_D_absolute", "ν<sub>D</sub> absolute", "MHz", "1f"),
-        ("detuning_zero_pressure", "ν<sub>FF′</sub> − ν<sub>D</sub>, P=0", "MHz", "1f"),
-        ("N2_shift", "N<sub>2</sub> shift βP", "MHz", "1f"),
-        ("detuning_with_N2", "ν<sub>FF′</sub> − ν<sub>D</sub>, with N<sub>2</sub>", "MHz", "1f"),
+        ("detuning_zero_pressure", "ν<sub>FF′</sub> − ν<sub>D</sub>", "MHz", "1f"),
+        ("N2_shift", "N<sub>2</sub> shift", "MHz", "1f"),
         ("transition_frequency_with_N2", "ν<sub>FF′</sub>, with N<sub>2</sub>", "MHz", "1f"),
         ("pump_1_frequency", "ν<sub>pump1</sub>", "MHz", "1f"),
         ("pump_2_frequency", "ν<sub>pump2</sub>", "MHz", "1f"),
@@ -1755,10 +1753,10 @@ def render_transition_table_html(df):
     for _col, title, unit, _kind in columns:
         if unit:
             header_cells.append(
-                f"<th><div class='quantity'>{title}</div><div class='unit'>({html.escape(unit)})</div></th>"
+                f"<th><div class='transition-header-quantity'>{title}</div><div class='transition-header-unit'>({html.escape(unit)})</div></th>"
             )
         else:
-            header_cells.append(f"<th><div class='quantity'>{title}</div></th>")
+            header_cells.append(f"<th><div class='transition-header-quantity'>{title}</div></th>")
 
     body_rows = []
     for _, row in df.iterrows():
@@ -1783,9 +1781,10 @@ def render_transition_table_html(df):
 .transition-table th {{
     position: sticky;
     top: 0;
-    background: rgb(250, 250, 250);
+    background: var(--background-color, #ffffff);
+    color: var(--text-color, #31333f);
     z-index: 1;
-    border-bottom: 1px solid rgba(49, 51, 63, 0.25);
+    border-bottom: 1px solid rgba(128, 128, 128, 0.45);
     padding: 0.35rem 0.45rem;
     text-align: left;
     white-space: nowrap;
@@ -1801,14 +1800,19 @@ def render_transition_table_html(df):
 .transition-table td:nth-child(3) {{
     text-align: left;
 }}
-.transition-table .quantity {{
+.transition-table .transition-header-quantity {{
     line-height: 1.15;
+    color: inherit !important;
+    -webkit-text-fill-color: currentColor !important;
+    opacity: 1 !important;
+    visibility: visible !important;
 }}
-.transition-table .unit {{
+.transition-table .transition-header-unit {{
     line-height: 1.15;
     font-size: 0.78rem;
     font-weight: 400;
-    color: rgba(49, 51, 63, 0.72);
+    color: var(--text-color, #31333f);
+    opacity: 0.72;
 }}
 </style>
 <div class='transition-table-wrap'>
@@ -1840,11 +1844,11 @@ def render_zeeman_properties_table_html(df):
         ("ν^{LS} (Hz)", "ν<sup>LS</sup>", "Hz", ".1f"),
         ("ν_m (Hz)", "ν<sub>m</sub>", "Hz", ".1f"),
         ("Λ (s⁻¹)", "Λ", "s<sup>−1</sup>", ".1f"),
-        ("R^{OP} (s^-1)", "R<sup>OP</sup>", "s<sup>−1</sup>", ".1f"),
+        ("G^{OP} (s^-1)", "G<sup>OP</sup>", "s<sup>−1</sup>", ".1f"),
         ("Γ^{OP} (s^-1)", "Γ<sup>OP</sup>", "s<sup>−1</sup>", ".1f"),
         ("Γ^{OP}/2π (Hz)", "Γ<sup>OP</sup>/2π", "Hz", ".1f"),
-        ("R^{ER} (s^-1)", "R<sup>ER</sup>", "s<sup>−1</sup>", ".2f"),
-        ("R^{SE} (s^-1)", "R<sup>SE</sup>", "s<sup>−1</sup>", ".2f"),
+        ("G^{ER} (s^-1)", "G<sup>ER</sup>", "s<sup>−1</sup>", ".2f"),
+        ("G^{SE} (s^-1)", "G<sup>SE</sup>", "s<sup>−1</sup>", ".2f"),
         ("Γ^{ER} (s^-1)", "Γ<sup>ER</sup>", "s<sup>−1</sup>", ".2f"),
         ("Γ^{SE} (s^-1)", "Γ<sup>SE</sup>", "s<sup>−1</sup>", ".2f"),
     ]
@@ -1858,9 +1862,9 @@ def render_zeeman_properties_table_html(df):
 
     header_cells = []
     for _key, title, unit, _spec in columns:
-        unit_html = f"<div class='unit'>({unit})</div>" if unit else ""
+        unit_html = f"<div class='zeeman-header-unit'>({unit})</div>" if unit else ""
         header_cells.append(
-            f"<th><div class='quantity'>{title}</div>{unit_html}</th>"
+            f"<th><div class='zeeman-header-quantity'>{title}</div>{unit_html}</th>"
         )
     headers = "".join(header_cells)
 
@@ -1896,20 +1900,26 @@ def render_zeeman_properties_table_html(df):
     position: sticky;
     top: 0;
     z-index: 2;
-    background: rgb(250, 250, 250);
-    border-bottom: 1px solid rgba(49, 51, 63, 0.30);
+    background: var(--background-color, #ffffff);
+    color: var(--text-color, #31333f);
+    border-bottom: 1px solid rgba(128, 128, 128, 0.50);
     padding: 0.35rem 0.45rem;
     text-align: right;
     white-space: nowrap;
 }}
-.zeeman-properties-table th .quantity {{
+.zeeman-properties-table th .zeeman-header-quantity {{
     line-height: 1.15;
+    color: inherit !important;
+    -webkit-text-fill-color: currentColor !important;
+    opacity: 1 !important;
+    visibility: visible !important;
 }}
-.zeeman-properties-table th .unit {{
+.zeeman-properties-table th .zeeman-header-unit {{
     line-height: 1.15;
     font-size: 0.78rem;
     font-weight: 400;
-    color: rgba(49, 51, 63, 0.72);
+    color: var(--text-color, #31333f);
+    opacity: 0.72;
 }}
 .zeeman-properties-table td {{
     border-bottom: 1px solid rgba(49, 51, 63, 0.12);
@@ -2086,8 +2096,10 @@ with st.sidebar:
             key="include_spin_exchange",
         )
     with cell_row_col2:
-        gamma_ER = st.number_input(
-            "ER rate (s⁻¹)",
+        # Keep the legacy session-state key for compatibility with existing
+        # condition files, while using R_ER as the physical rate symbol.
+        R_ER = st.number_input(
+            r"$R_{\mathrm{ER}}$ (s⁻¹)",
             min_value=0.0,
             step=1.0,
             format="%.1f",
@@ -2386,7 +2398,7 @@ for b in beam_inputs:
 L_optical = L_total.copy()
 
 M_ER = build_ER_matrix(atom, ground_states)
-L_linear = L_optical + gamma_ER * (M_ER - np.eye(N))
+L_linear = L_optical + R_ER * (M_ER - np.eye(N))
 
 se_rate_info = spin_exchange_rate_info(atom_name, atom, temperature_C)
 R_SE_inferred = se_rate_info["rate_s"]
@@ -2416,24 +2428,24 @@ nu_LS, light_shift_available = total_nu_LS_from_diagnostics(
     beam_inputs,
     diagnostics,
 )
-R_OP_by_state = total_R_OP_by_ground_state(
+G_OP_by_state = total_G_OP_by_ground_state(
     ground_states,
     diagnostics,
 )
 Lambda_by_state = optical_Lambda_fractional_rates(
     L_optical,
     p_ss,
-    R_OP_by_state,
+    G_OP_by_state,
 )
 
-R_ER_net = er_population_fractional_relaxation_rates(
-    M_ER, p_ss, gamma_ER
+G_ER = er_population_fractional_relaxation_rates(
+    M_ER, p_ss, R_ER
 )
 Gamma_ER = er_adjacent_coherence_self_relaxation_rates(
-    atom, ground_states, gamma_ER
+    atom, ground_states, R_ER
 )
 
-R_SE_net = spin_exchange_population_fractional_relaxation_rates(
+G_SE = spin_exchange_population_fractional_relaxation_rates(
     se_solver_info["M_SE"], p_ss, R_SE
 )
 Gamma_SE = (
@@ -2451,10 +2463,10 @@ df_pop = pd.DataFrame({
     "population": p_ss,
     "nu_LS": nu_LS,
     "Lambda": Lambda_by_state,
-    "R_OP": R_OP_by_state,
-    "R_ER_net": R_ER_net,
+    "G_OP": G_OP_by_state,
+    "G_ER": G_ER,
     "Gamma_ER": Gamma_ER,
-    "R_SE_net": R_SE_net,
+    "G_SE": G_SE,
     "Gamma_SE": Gamma_SE,
 })
 df_pop = add_population_difference_column(df_pop)
@@ -2490,15 +2502,15 @@ df_pop_display = df_pop.rename(columns={
     "nu_LS": "ν^{LS} (Hz)",
     "nu_m": "ν_m (Hz)",
     "Lambda": "Λ (s⁻¹)",
-    "R_OP": "R^{OP} (s^-1)",
+    "G_OP": "G^{OP} (s^-1)",
     "Gamma_OP": "Γ^{OP} (s^-1)",
     "Gamma_OP_over_2pi": "Γ^{OP}/2π (Hz)",
-    "R_ER_net": "R^{ER} (s^-1)",
+    "G_ER": "G^{ER} (s^-1)",
     "Gamma_ER": "Γ^{ER} (s^-1)",
-    "R_SE_net": "R^{SE} (s^-1)",
+    "G_SE": "G^{SE} (s^-1)",
     "Gamma_SE": "Γ^{SE} (s^-1)",
 })
-# Place R^ER and R^SE immediately before Gamma^ER.
+# Place G^ER and G^SE immediately before Gamma^ER.
 df_pop_display = df_pop_display[[
     "F",
     "m",
@@ -2508,11 +2520,11 @@ df_pop_display = df_pop_display[[
     "ν^{LS} (Hz)",
     "ν_m (Hz)",
     "Λ (s⁻¹)",
-    "R^{OP} (s^-1)",
+    "G^{OP} (s^-1)",
     "Γ^{OP} (s^-1)",
     "Γ^{OP}/2π (Hz)",
-    "R^{ER} (s^-1)",
-    "R^{SE} (s^-1)",
+    "G^{ER} (s^-1)",
+    "G^{SE} (s^-1)",
     "Γ^{ER} (s^-1)",
     "Γ^{SE} (s^-1)",
 ]]
@@ -2583,7 +2595,6 @@ with left:
     fig.tight_layout()
     st.pyplot(fig, width="stretch")
 
-    summary_sum_p = p_ss.sum()
     summary_m = expectation_m(ground_states, p_ss)
     summary_m2 = expectation_m2(ground_states, p_ss)
 
@@ -2616,10 +2627,6 @@ with left:
         </style>
         <div class="population-summary-row">
             <div class="population-summary-item">
-                <span class="population-summary-label">Σp =</span>
-                <span class="population-summary-value">{summary_sum_p:.4f}</span>
-            </div>
-            <div class="population-summary-item">
                 <span class="population-summary-label">〈m〉 =</span>
                 <span class="population-summary-value">{summary_m:.4f}</span>
             </div>
@@ -2642,13 +2649,13 @@ with right:
                 r"""
                 $\small D_m=P_m-P_{m-1}$ is the population difference between adjacent Zeeman sublevels.  
                 $\small \nu_m=\nu^{\mathrm{LS}}_{m}-\nu^{\mathrm{LS}}_{m-1}$ is the adjacent-sublevel light-shift difference.  
-                $\small R^{\mathrm{ER}}$ is the signed net fractional ER rate of population; positive means loss.  
-                $\small R^{\mathrm{SE}}$ is the signed net fractional SE rate of population at the steady state.  
-                $\small \Lambda$ is the repopulation rate into $\small \lvert F,m\rangle$ divided by its steady-state population.  
-                $\small R^{\mathrm{OP}}$ is the depopulation rate from $\small\lvert F,m\rangle$, summed over excited states and all active pump beams.  
-                $\small \Gamma^{\mathrm{OP}}=(R^{\mathrm{OP}}_m+R^{\mathrm{OP}}_{m-1})/2$ is the pump-induced adjacent-coherence decay rate, and $\small \Gamma^{\mathrm{OP}}/2\pi$ is the corresponding broadening.  
-                $\small \Gamma^{\mathrm{ER}}$ is the local adjacent-coherence self-decay rate due to ER for the row-associated coherence.  
-                $\small \Gamma^{\mathrm{SE}}$ is the adjacent-coherence self-decay rate under the steady-state mean-field SE for the row-associated coherence.
+                $\small G^{\mathrm{ER}}_{m}$ is the signed net fractional ER rate of population of sublevel m; positive means loss.  
+                $\small G^{\mathrm{SE}}_{m}$ is the signed net fractional SE rate of population of sublevel m at the steady state. 
+                $\small \Lambda_{m}$ is the totalrepopulation rate into $\small \lvert F,m\rangle$ divided by its steady-state population.  
+                $\small G^{\mathrm{OP}}_{m}$ is the depopulation rate from $\small\lvert F,m\rangle$, summed over excited states and active pumps.  
+                $\small \Gamma^{\mathrm{OP}}_{m}=(G^{\mathrm{OP}}_m+G^{\mathrm{OP}}_{m-1})/2$ is the pump-induced adjacent-coherence decay rate, and $\small \Gamma^{\mathrm{OP}}_{m}/2\pi$ is the corresponding broadening.  
+                $\small \Gamma^{\mathrm{ER}}_{m}$ is the ER-induced self-decay rate of the local adjacent-coherence $\small\rho_{m,m-1}$.  
+                $\small \Gamma^{\mathrm{SE}}_{m}$ is the ER-induced self-decay rate of the local adjacent-coherence $\small \rho_{m,m-1}$ at the steady-state.
                 """
             )
     st.markdown(
@@ -2725,39 +2732,107 @@ with st.expander("Light-shift calculation", expanded=False):
     st.markdown(
         r"""
         The light-shift column is calculated only when every active pump beam has
-        a single spherical polarization component $q=-1,0,+1$ relative to the
-        selected quantization axis. In that case the AC-Stark Hamiltonian is
-        diagonal in the displayed $\lvert F,m\rangle$ basis and commutes with the
-        spin component along the quantization axis.
+        one spherical polarization component $q=-1,0,+1$ relative to the selected
+        quantization axis. In that case the AC-Stark Hamiltonian is diagonal in
+        the displayed $\lvert F,m\rangle$ basis and commutes with the spin
+        component along the quantization axis.
         """
     )
     st.latex(
         r"""
         R_{F,m\rightarrow F',m'}
         \propto
-        \operatorname{Re}\,w(z),
+        \operatorname{Re}\!\left[w(z)\right],
         \qquad
         \delta\omega_{F,m\rightarrow F',m'}
         \propto
-        \frac{1}{2}\operatorname{Im}\,w(z)
+        \frac{1}{2}\operatorname{Im}\!\left[w(z)\right]
         """
     )
     st.latex(
         r"""
         z=
         \frac{\Delta_{F,m\rightarrow F',m'}+i\Gamma_L/2}
-        {\sigma_D\sqrt{2}}
+        {\sigma_D\sqrt{2}},
+        \qquad
+        \sigma_D=
+        \frac{\Delta\nu_{D,\mathrm{FWHM}}}
+        {2\sqrt{2\ln 2}}
         """
     )
     st.markdown(
         r"""
-        The table reports $\nu^{\mathrm{LS}}=\delta\omega/(2\pi)$ in Hz and
-        $\nu_m=\nu^{\mathrm{LS}}_m-\nu^{\mathrm{LS}}_{m-1}$ in Hz. The sum over
-        excited states gives the total diagonal AC-Stark shift, including scalar,
-        vector, and tensor contributions. In the zero-Doppler or far-wing limit,
-        this reduces to
-        $\delta\omega=R^{\mathrm{OP}}\Delta/\Gamma_L$.
+        **Definitions**
+
+        The polarization index $q=+1,0,-1$ denotes the $\sigma^+$, $\pi$, and
+        $\sigma^-$ spherical components, respectively, relative to the selected
+        quantization axis. 
+
+        $R_{F,m\rightarrow F',m'}$ is the optical excitation or depopulation rate
+        for the indicated Zeeman transition. The quantity
+        $\delta\omega_{F,m\rightarrow F',m'}$ is that transition's AC-Stark shift
+        in angular-frequency units.
+
+        $w(z)$ is the complex Faddeeva function used to describe the Voigt line
+        shape. Its real part gives the Doppler-averaged absorption profile, and
+        its imaginary part gives the corresponding dispersive profile.
+
+        $\Delta_{F,m\rightarrow F',m'}$ is the laser-frequency detuning from the
+        pressure-shifted Zeeman transition $\lvert F,m\rangle\rightarrow
+        \lvert F',m'\rangle$. A positive value means that the laser frequency is
+        above the transition frequency. $\Gamma_L$ is the total Lorentzian full width at half maximum, including
+        the natural linewidth and N$_2$ pressure broadening. The quantity
+        $\sigma_D$ is the Gaussian standard deviation of the Doppler distribution,
+        and $\Delta\nu_{D,\mathrm{FWHM}}$ is its Doppler full width at half maximum.
+
+        The table quantity $\nu^{\mathrm{LS}}=\delta\omega/(2\pi)$ is the total
+        light shift of a ground-state Zeeman sublevel in Hz after summing over all
+        excited states and active beams. The adjacent-sublevel light-shift
+        difference is $\nu_m=\nu^{\mathrm{LS}}_m-\nu^{\mathrm{LS}}_{m-1}$.
+        Finally, $G^{\mathrm{OP}}$ is the total optical depopulation rate of the
+        relevant ground-state sublevel, summed over excited states and active
+        pump beams.
+        
+        In the zero-Doppler or far-wing limit, each isolated two-level
+        contribution reduces to
+        $\delta\omega=G^{\mathrm{OP}}\Delta/\Gamma_L$.
         This small shift is not fed back into the optical detunings.
+ 
+        The total diagonal AC-Stark shift contains scalar, vector, and tensor
+        contributions. Within one hyperfine manifold, their dependence on the
+        Zeeman quantum number can be written schematically as
+        $\nu_m^{\mathrm{LS}}=\nu^{(0)}+C_V\mathcal{P}_1m
+        +C_T\mathcal{P}_2[3m^2-F(F+1)]$.  The coefficients $C_V$ and $C_T$ contain the optical intensity,
+        detunings, atomic line strengths, and normalization factors. 
+        
+        The scalar term $\nu^{(0)}$ is independent of $m$ and therefore cancels from the adjacent-sublevel
+        difference $\nu_m$.
+
+        The vector contribution is
+        $\nu_m^{(V)}=C_V\mathcal{P}_1m$. It is odd in $m$ and therefore acts
+        like an effective magnetic field along the quantization axis. Here
+        $\mathcal{P}_1=|\epsilon_{+1}|^2-|\epsilon_{-1}|^2$ measures the optical
+        helicity relative to that axis, where $\epsilon_q$ is the normalized
+        spherical electric-field amplitude. Thus $\mathcal{P}_1=+1$ for pure
+        $\sigma^+$ light, $-1$ for pure $\sigma^-$ light, and $0$ for pure
+        $\pi$ light. Its contribution to adjacent levels is independent of $m$:
+        $\nu_m^{(V)}-\nu_{m-1}^{(V)}=C_V\mathcal{P}_1$.
+
+        The tensor contribution is
+        $\nu_m^{(T)}=C_T\mathcal{P}_2[3m^2-F(F+1)]$. It is even in $m$ and
+        produces a quadratic, generally nonuniform spacing across the Zeeman
+        manifold. With the normalization used here,
+        $\mathcal{P}_2=(3|\epsilon_0|^2-1)/2$; hence $\mathcal{P}_2=1$ for pure
+        $\pi$ light and $\mathcal{P}_2=-1/2$ for pure $\sigma^+$ or $\sigma^-$
+        light. The adjacent-level tensor contribution is linear in the transition
+        label $m$:
+        $\nu_m^{(T)}-\nu_{m-1}^{(T)}=3C_T\mathcal{P}_2(2m-1)$.
+        The tensor term is absent for $F<1$.
+
+        The app does not assume the schematic polynomial form when calculating the table; it
+        sums the state-resolved Clebsch-Gordan-weighted dispersive shifts over all
+        excited hyperfine states and active beams. The formulas above explain the
+        resulting characteristic linear and quadratic dependence on $m$.
         """
     )
 
@@ -2782,7 +2857,7 @@ with st.expander("Model and sign convention"):
         +
         L_{\mathrm{op},3}
         +
-        \Gamma_{\mathrm{ER}}(M_{\mathrm{ER}}-\mathbb I)
+        R_{\mathrm{ER}}(M_{\mathrm{ER}}-\mathbb I)
         \right]\mathbf p
         +
         R_{\mathrm{SE}}(T)
