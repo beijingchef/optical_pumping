@@ -1,22 +1,31 @@
-# alkali_pumping_v3.17.py
+# alkali_pumping_v4.7.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
 #   with N2 buffer gas, three monochromatic optical-pumping beams,
 #   pressure broadening, pressure shift, electron-randomization relaxation,
-#   and alkali-alkali spin-exchange relaxation.
+#   alkali-alkali spin-exchange relaxation, and a weak linearly polarized
+#   radio-frequency response calculation.
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v3.17.py
+#   streamlit run alkali_pumping_v4.7.py
 #
-# Model:
+# Population model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + R_ER (M_ER - I)] p
 #          + R_SE(T) [M_SE[p] - I] p
 #
-# The app is population-only. It does not keep Zeeman coherences, excited-state
-# coherences, spin-exchange coherences, or optical propagation effects. Spin exchange is
-# included as a population-only mean-field term.
+# RF model:
+#   The no-RF steady state remains the unperturbed state. Adjacent Zeeman
+#   coherences are calculated to first order in a linearly polarized RF field.
+#   Both rotating components of the real RF field are retained. The coherence
+#   linewidth is Gamma_OP + Gamma_ER + Gamma_SE for each adjacent transition.
+#   The displayed response is the zero-drive susceptibility |d<F_i>/dOmega_1|.
+#
+# The app does not propagate a finite-RF steady state, excited-state coherences,
+# pair correlations, or optical propagation effects. Spin exchange is included
+# as a population-only mean-field term, and its displayed coherence rates enter
+# the weak-drive local-coherence response.
 
 import json
 from datetime import datetime
@@ -726,7 +735,14 @@ def absolute_detuning_from_transition_choice(
     return float(selected["detP"] + relative_detuning_MHz), selected
 
 
-CONDITION_SCHEMA_VERSION = "2.23"
+CONDITION_SCHEMA_VERSION = "4.7"
+RF_CONDITION_KEYS = (
+    "rf_axis",
+    "rf_observable",
+    "rf_frequency_lower_hz",
+    "rf_frequency_upper_hz",
+    "rf_relaxation_normalized",
+)
 CONDITION_KEYS = (
     "condition_name",
     "atom_name", "gamma_ER", "q_axis", "temperature_C_for_table", "n2_pressure_torr",
@@ -735,7 +751,11 @@ CONDITION_KEYS = (
     "line1", "transition1", "det_rel1", "rate1", "k1", "pol1",
     "line2", "transition2", "det_rel2", "rate2", "k2", "pol2",
     "line3", "transition3", "det_rel3", "rate3", "k3", "pol3",
+    *RF_CONDITION_KEYS,
     "show_allowed_only", "show_rate_matrices",
+)
+LEGACY_CONDITION_KEYS = tuple(
+    key for key in CONDITION_KEYS if key not in RF_CONDITION_KEYS
 )
 
 
@@ -770,6 +790,11 @@ DEFAULT_STARTUP_CONDITION = {
     "rate3": 0.0,
     "k3": "x",
     "pol3": "linear z",
+    "rf_axis": "x",
+    "rf_observable": "Fx",
+    "rf_frequency_lower_hz": 0.0,
+    "rf_frequency_upper_hz": 50.0,
+    "rf_relaxation_normalized": False,
     "show_allowed_only": True,
     "show_rate_matrices": False,
 }
@@ -785,7 +810,7 @@ def clean_condition_name(value):
 
 
 def build_condition_payload(values):
-    """Build the strict v2.23 JSON payload from current condition values."""
+    """Build the v4.7 JSON payload from current condition values."""
     conditions = {key: values.get(key) for key in CONDITION_KEYS}
     conditions["condition_name"] = clean_condition_name(
         conditions.get("condition_name")
@@ -807,20 +832,35 @@ def current_condition_values(condition_name=None):
     return values
 
 
+def normalize_rf_frequency_bounds(prefer="lower"):
+    """Keep the RF plotting interval nonnegative and ordered."""
+    lower = max(0.0, float(st.session_state.get("rf_frequency_lower_hz", 0.0)))
+    upper = max(0.0, float(st.session_state.get("rf_frequency_upper_hz", lower)))
+
+    if lower > upper:
+        if prefer == "upper":
+            lower = upper
+        else:
+            upper = lower
+
+    st.session_state["rf_frequency_lower_hz"] = lower
+    st.session_state["rf_frequency_upper_hz"] = upper
+
+
 def apply_loaded_condition_dict(payload):
-    """Apply a strict alkali_pumping v2.23 condition file to session state."""
+    """Apply a v4.7 condition file, with earlier-condition compatibility."""
     if not isinstance(payload, dict):
         raise ValueError("The loaded file is not a JSON object.")
     if payload.get("app") != "alkali_pumping":
         raise ValueError("This is not an alkali_pumping condition file.")
     if payload.get("format") != "alkali_pumping_conditions":
-        raise ValueError("The JSON file does not use the v2.23 condition format.")
+        raise ValueError("The JSON file is not an alkali_pumping condition file.")
 
     conditions = payload.get("conditions")
     if not isinstance(conditions, dict):
         raise ValueError("The JSON file does not contain a conditions object.")
 
-    missing = [key for key in CONDITION_KEYS if key not in conditions]
+    missing = [key for key in LEGACY_CONDITION_KEYS if key not in conditions]
     if missing:
         raise ValueError(
             "The condition file is missing required fields: " + ", ".join(missing)
@@ -828,9 +868,11 @@ def apply_loaded_condition_dict(payload):
 
     loaded_name = clean_condition_name(conditions["condition_name"])
     for key in CONDITION_KEYS:
-        value = conditions[key]
+        value = conditions.get(key, DEFAULT_STARTUP_CONDITION.get(key))
         if value is not None:
             st.session_state[key] = value
+
+    normalize_rf_frequency_bounds(prefer="lower")
 
     # Prevent atom-change default logic from overwriting loaded N2 coefficients.
     st.session_state["_last_atom_name_for_defaults"] = conditions["atom_name"]
@@ -1657,6 +1699,219 @@ def steady_state_with_spin_exchange(L_linear, atom, ground_states, R_SE, max_ite
     }
 
 
+
+# ============================================================
+# 7c. Weak linearly polarized RF response
+# ============================================================
+
+def lab_axis_in_local_frame(q_axis, lab_axis):
+    """Map a laboratory axis to the local frame whose z axis is q_axis.
+
+    This uses the same right-handed local frames as local_components():
+      q=z: (x_local,y_local,z_local) = (x,y,z)
+      q=x: (x_local,y_local,z_local) = (y,z,x)
+      q=y: (x_local,y_local,z_local) = (z,x,y)
+    """
+    mappings = {
+        "z": {"x": "x", "y": "y", "z": "z"},
+        "x": {"x": "z", "y": "x", "z": "y"},
+        "y": {"x": "y", "y": "z", "z": "x"},
+    }
+    return mappings[q_axis][lab_axis]
+
+
+def adjacent_spin_matrix_elements(local_axis, ladder_coefficient):
+    """Return O_ab and O_ba for a=|F,m>, b=|F,m-1>."""
+    C = float(ladder_coefficient)
+    if local_axis == "x":
+        return 0.5 * C, 0.5 * C
+    if local_axis == "y":
+        return -0.5j * C, 0.5j * C
+    if local_axis == "z":
+        return 0.0j, 0.0j
+    raise ValueError(local_axis)
+
+
+def weak_rf_observable_susceptibility(
+    frequencies_hz,
+    ground_states,
+    populations,
+    adjacent_transition_hz,
+    gamma_op,
+    gamma_er,
+    gamma_se,
+    q_axis,
+    rf_axis,
+    observable,
+):
+    """Return the zero-drive RF susceptibility |d<F_i>/dOmega_1|.
+
+    The applied field is linearly polarized along the selected laboratory
+    axis i = x, y, or z:
+
+        H_rf / hbar = Omega_1 F_i cos(omega t).
+
+    The density matrix is expanded directly to first order,
+
+        rho = rho_0 + Omega_1 rho^(1) + O(Omega_1^2),
+
+    and this function calculates rho^(1) without assigning any finite numerical
+    value to Omega_1. The returned array is therefore
+
+        |d<F_i>(omega) / dOmega_1|_(Omega_1=0)
+        = |<F_i>(omega)| / Omega_1
+
+    within the linear weak-drive approximation.
+
+    Every adjacent coherence is treated independently with its local rate
+
+        Gamma_m = Gamma_OP,m + Gamma_ER,m + Gamma_SE,m.
+
+    Both Fourier components of the real cosine field are retained. This is
+    important when a negative signed transition frequency contributes to a
+    positive-frequency resonance through the counter-rotating component.
+    """
+    frequencies_hz = np.asarray(frequencies_hz, dtype=float)
+    p = np.asarray(populations, dtype=float)
+    transition_hz = np.asarray(adjacent_transition_hz, dtype=float)
+    gamma_op = np.asarray(gamma_op, dtype=float)
+    gamma_er = np.asarray(gamma_er, dtype=float)
+    gamma_se = np.asarray(gamma_se, dtype=float)
+
+    susceptibility_amplitude = np.zeros_like(frequencies_hz, dtype=float)
+    susceptibility_phasor = np.zeros_like(frequencies_hz, dtype=complex)
+
+    if len(ground_states) == 0:
+        return susceptibility_amplitude, {
+            "used_transitions": 0,
+            "nonpositive_linewidths": 0,
+        }
+
+    drive_local_axis = lab_axis_in_local_frame(q_axis, rf_axis)
+    observable_lab_axis = observable[-1].lower()
+    observable_local_axis = lab_axis_in_local_frame(q_axis, observable_lab_axis)
+
+    state_index = {
+        (float(state["F"]), float(state["m"])): idx
+        for idx, state in enumerate(ground_states)
+    }
+
+    omega = 2.0 * np.pi * frequencies_hz
+    used_transitions = 0
+    nonpositive_linewidths = 0
+
+    for a_idx, state in enumerate(ground_states):
+        F = float(state["F"])
+        m = float(state["m"])
+        b_idx = state_index.get((F, m - 1.0))
+        if b_idx is None or not np.isfinite(transition_hz[a_idx]):
+            continue
+
+        C2 = F * (F + 1.0) - m * (m - 1.0)
+        if C2 <= 0:
+            continue
+        C = sqrt(C2)
+
+        drive_ab, drive_ba = adjacent_spin_matrix_elements(drive_local_axis, C)
+        obs_ab, obs_ba = adjacent_spin_matrix_elements(observable_local_axis, C)
+        if abs(drive_ab) == 0.0 or (abs(obs_ab) == 0.0 and abs(obs_ba) == 0.0):
+            continue
+
+        gamma = gamma_op[a_idx] + gamma_er[a_idx] + gamma_se[a_idx]
+        if not np.isfinite(gamma):
+            continue
+        if gamma <= 0.0:
+            nonpositive_linewidths += 1
+            gamma = 1e-12
+
+        D_m = p[a_idx] - p[b_idx]
+        omega_m = 2.0 * np.pi * transition_hz[a_idx]
+
+        # Coefficients of exp(-i omega t) in d(rho_ab)/dOmega_1 and
+        # d(rho_ba)/dOmega_1 at Omega_1=0. The factor 1/2 is the Fourier
+        # amplitude of cos(omega t); no finite drive amplitude is introduced.
+        drho_ab_plus_domega1 = (
+            1j * 0.5 * drive_ab * D_m
+            / (gamma + 1j * (omega_m - omega))
+        )
+        drho_ba_plus_domega1 = (
+            -1j * 0.5 * drive_ba * D_m
+            / (gamma + 1j * (-omega_m - omega))
+        )
+
+        susceptibility_phasor += (
+            obs_ba * drho_ab_plus_domega1
+            + obs_ab * drho_ba_plus_domega1
+        )
+        used_transitions += 1
+
+    # If d<O(t)>/dOmega_1 = chi_plus exp(-i omega t) + c.c., the oscillation
+    # susceptibility amplitude is 2 |chi_plus|.
+    susceptibility_amplitude = 2.0 * np.abs(susceptibility_phasor)
+    return susceptibility_amplitude, {
+        "used_transitions": used_transitions,
+        "nonpositive_linewidths": nonpositive_linewidths,
+        "drive_local_axis": drive_local_axis,
+        "observable_local_axis": observable_local_axis,
+    }
+
+
+def largest_abs_Dm_relaxation_reference(df_pop):
+    """Return the total adjacent-coherence relaxation rate at the largest |D_m|.
+
+    Here D_m = P_m - P_(m-1), as displayed in the Zeeman table, but the
+    reference transition is selected by the largest absolute magnitude |D_m|.
+    Rows without an adjacent lower-m partner are excluded. The total local
+    relaxation rate is
+
+        Gamma_m = Gamma_OP,m + Gamma_ER,m + Gamma_SE,m.
+    """
+    required = {
+        "F", "m", "population_difference",
+        "Gamma_OP", "Gamma_ER", "Gamma_SE",
+    }
+    if not required.issubset(df_pop.columns):
+        return {
+            "available": False,
+            "reason": "required columns are missing",
+        }
+
+    candidate = df_pop.loc[:, list(required)].copy()
+    finite_D = np.isfinite(candidate["population_difference"].to_numpy(dtype=float))
+    candidate = candidate.loc[finite_D]
+    if candidate.empty:
+        return {
+            "available": False,
+            "reason": "no adjacent transition has a finite D_m",
+        }
+
+    # Select the adjacent transition with the largest population-difference magnitude.
+    row_index = candidate["population_difference"].abs().idxmax()
+    row = df_pop.loc[row_index]
+    gamma_total = float(row["Gamma_OP"] + row["Gamma_ER"] + row["Gamma_SE"])
+
+    if not np.isfinite(gamma_total) or gamma_total <= 0.0:
+        return {
+            "available": False,
+            "reason": "the selected total relaxation rate is not positive and finite",
+            "F": float(row["F"]),
+            "m": float(row["m"]),
+            "D_m": float(row["population_difference"]),
+            "Gamma_m": gamma_total,
+        }
+
+    return {
+        "available": True,
+        "F": float(row["F"]),
+        "m": float(row["m"]),
+        "D_m": float(row["population_difference"]),
+        "Gamma_m": gamma_total,
+        "Gamma_OP": float(row["Gamma_OP"]),
+        "Gamma_ER": float(row["Gamma_ER"]),
+        "Gamma_SE": float(row["Gamma_SE"]),
+    }
+
+
 # ============================================================
 # 8. Steady-state solver
 # ============================================================
@@ -2098,7 +2353,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.title("Alkali pumping: three pumps + ER + SE")
+st.title("Alkali pumping v4.7: three pumps + ER + SE + weak RF")
 
 # ============================================================
 # Sidebar: all input condition values
@@ -2374,7 +2629,7 @@ with st.sidebar:
                 "Load condition",
                 type=["json"],
                 key="condition_file_uploader",
-                help="Choose an alkali_pumping v2.23 JSON condition file.",
+                help="Choose an alkali_pumping v4.x or legacy v2.23 JSON condition file.",
                 label_visibility="collapsed",
                 on_change=load_condition_callback,
             )
@@ -2415,6 +2670,18 @@ with st.sidebar:
                 + st.session_state.pop("_condition_load_error")
             )
 
+
+# RF display controls are rendered next to and below the response plot. Read
+# their current session-state values here so the model can be built before the
+# main output layout is rendered.
+normalize_rf_frequency_bounds(prefer="lower")
+rf_axis = st.session_state.get("rf_axis", "x")
+rf_observable = st.session_state.get("rf_observable", "Fx")
+rf_frequency_lower_hz = float(st.session_state.get("rf_frequency_lower_hz", 0.0))
+rf_frequency_upper_hz = float(st.session_state.get("rf_frequency_upper_hz", 50.0))
+rf_relaxation_normalized = bool(
+    st.session_state.get("rf_relaxation_normalized", False)
+)
 
 # ============================================================
 # Build model
@@ -2610,6 +2877,42 @@ df_pop = add_population_difference_column(df_pop)
 df_pop = add_nu_m_column(df_pop)
 df_pop = add_adjacent_optical_relaxation_columns(df_pop)
 
+if np.isclose(rf_frequency_lower_hz, rf_frequency_upper_hz):
+    rf_frequencies_hz = np.array([rf_frequency_lower_hz], dtype=float)
+else:
+    rf_frequencies_hz = np.linspace(
+        rf_frequency_lower_hz,
+        rf_frequency_upper_hz,
+        1201,
+    )
+
+if light_shift_available:
+    rf_susceptibility_amplitude, rf_response_info = weak_rf_observable_susceptibility(
+        frequencies_hz=rf_frequencies_hz,
+        ground_states=ground_states,
+        populations=p_ss,
+        adjacent_transition_hz=df_pop["nu_m"].to_numpy(dtype=float),
+        gamma_op=df_pop["Gamma_OP"].to_numpy(dtype=float),
+        gamma_er=df_pop["Gamma_ER"].to_numpy(dtype=float),
+        gamma_se=df_pop["Gamma_SE"].to_numpy(dtype=float),
+        q_axis=q_axis,
+        rf_axis=rf_axis,
+        observable=rf_observable,
+    )
+else:
+    rf_susceptibility_amplitude = np.full_like(rf_frequencies_hz, np.nan, dtype=float)
+    rf_response_info = {
+        "used_transitions": 0,
+        "nonpositive_linewidths": 0,
+    }
+
+rf_relaxation_reference = largest_abs_Dm_relaxation_reference(df_pop)
+rf_plot_amplitude = np.asarray(rf_susceptibility_amplitude, dtype=float).copy()
+rf_relaxation_normalization_applied = False
+if rf_relaxation_normalized and rf_relaxation_reference.get("available", False):
+    rf_plot_amplitude /= rf_relaxation_reference["Gamma_m"]
+    rf_relaxation_normalization_applied = True
+
 df_F = population_by_F(df_pop)
 
 # Show the total population P_F of each hyperfine manifold only on its m=0 row
@@ -2804,6 +3107,177 @@ with right:
     else:
         st.caption(r"$\nu^{\mathrm{LS}}$ is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
 
+
+
+compact_section_title("Weak-RF susceptibility: |⟨Fᵢ⟩| / Ω₁")
+
+# RF response region: a narrow control column and a wide plot column.
+rf_control_col, rf_plot_col = st.columns([1, 9], gap="small")
+
+with rf_control_col:
+    rf_axis = st.selectbox(
+        "RF axis",
+        ["x", "y", "z"],
+        key="rf_axis",
+        help="Laboratory axis of the linearly polarized RF magnetic field.",
+    )
+    rf_observable = st.selectbox(
+        "Observable",
+        ["Fx", "Fy", "Fz"],
+        key="rf_observable",
+        format_func=lambda value: {"Fx": "F_x", "Fy": "F_y", "Fz": "F_z"}[value],
+        help="Laboratory-frame spin component used for the zero-drive RF susceptibility.",
+    )
+    rf_frequency_lower_hz = st.number_input(
+        "Lower (Hz)",
+        min_value=0.0,
+        step=1.0,
+        format="%g",
+        key="rf_frequency_lower_hz",
+        on_change=normalize_rf_frequency_bounds,
+        args=("lower",),
+    )
+    rf_frequency_upper_hz = st.number_input(
+        "Upper (Hz)",
+        min_value=0.0,
+        step=1.0,
+        format="%g",
+        key="rf_frequency_upper_hz",
+        on_change=normalize_rf_frequency_bounds,
+        args=("upper",),
+    )
+    rf_relaxation_normalized = st.checkbox(
+        "Relaxation normalized",
+        key="rf_relaxation_normalized",
+        help=(
+            "Divide the plotted susceptibility by the total adjacent-coherence "
+            "relaxation rate Gamma_m for the transition with the largest |D_m|."
+        ),
+    )
+
+with rf_plot_col:
+    if not light_shift_available:
+        st.warning(
+            "The RF response is unavailable because at least one active optical "
+            "field produces a non-diagonal light-shift Hamiltonian in the selected "
+            "quantization basis."
+        )
+    elif rf_response_info.get("used_transitions", 0) == 0:
+        if lab_axis_in_local_frame(q_axis, rf_axis) == "z":
+            st.info(
+                f"The laboratory-{rf_axis} RF field is longitudinal for the selected "
+                "quantization axis, so it does not drive adjacent Zeeman coherences "
+                "to first order."
+            )
+        elif lab_axis_in_local_frame(q_axis, rf_observable[-1].lower()) == "z":
+            st.info(
+                f"⟨{rf_observable}⟩ is longitudinal in the selected quantization "
+                "frame and has no first-order weak-drive response from adjacent "
+                "coherences."
+            )
+        else:
+            st.info("No valid adjacent Zeeman transitions were available for the RF response.")
+    else:
+        rf_fig, rf_ax = plt.subplots(figsize=(8.6, 3.35))
+        if len(rf_frequencies_hz) == 1:
+            rf_ax.plot(
+                rf_frequencies_hz,
+                rf_plot_amplitude,
+                marker="o",
+                linestyle="none",
+            )
+        else:
+            rf_ax.plot(rf_frequencies_hz, rf_plot_amplitude)
+        rf_ax.set_xlabel("RF frequency (Hz)")
+        if rf_relaxation_normalization_applied:
+            rf_ax.set_ylabel(
+                rf"$|\langle F_{{{rf_observable[-1].lower()}}}\rangle|/"
+                rf"(\Omega_1\Gamma_{{m_*}})$ "
+                rf"($\hbar\,\mathrm{{s}}^2$/atom)"
+            )
+        else:
+            rf_ax.set_ylabel(
+                rf"$|\langle F_{{{rf_observable[-1].lower()}}}\rangle|/\Omega_1$ "
+                rf"($\hbar\,\mathrm{{s}}$/atom)"
+            )
+        rf_ax.set_title(rf"$B_{{\mathrm{{rf}}}}\parallel {rf_axis}$")
+        rf_ax.grid(True, alpha=0.25)
+        rf_fig.subplots_adjust(
+            left=0.105,
+            right=0.995,
+            bottom=0.205,
+            top=0.895,
+        )
+        st.pyplot(rf_fig, width="stretch")
+
+        if rf_relaxation_normalized:
+            if rf_relaxation_normalization_applied:
+                ref = rf_relaxation_reference
+                st.caption(
+                    "Relaxation normalization: "
+                    f"largest |D_m| at F={ref['F']:g}, m={ref['m']:g}; "
+                    f"D_m={ref['D_m']:.3f}, Gamma_m={ref['Gamma_m']:.1f} s^-1 "
+                    f"(OP={ref['Gamma_OP']:.1f}, ER={ref['Gamma_ER']:.1f}, "
+                    f"SE={ref['Gamma_SE']:.1f} s^-1)."
+                )
+            else:
+                st.warning(
+                    "Relaxation normalization could not be applied: "
+                    + rf_relaxation_reference.get("reason", "unknown reason")
+                    + "."
+                )
+
+        if rf_response_info.get("nonpositive_linewidths", 0) > 0:
+            st.warning(
+                "At least one summed local coherence linewidth was nonpositive and "
+                "was replaced by a small numerical floor in the response plot."
+            )
+
+with st.expander("Weak-RF response model", expanded=False):
+    st.markdown(
+        r"""
+        The population graph and Zeeman table are the zero-RF steady state. The
+        RF plot is a first-order response around that state for a linearly
+        polarized field along the selected laboratory RF axis.
+
+        For each adjacent coherence $\rho_{m,m-1}$, the signed transition
+        frequency and total local linewidth are
+        """
+    )
+    st.latex(
+        rf"\mathbf{{B}}_{{\rm rf}}=B_1\cos(\omega t)\,\hat{{\mathbf{{{rf_axis}}}}}"
+    )
+    st.latex(
+        r"""
+        \omega_m=2\pi\nu_m,
+        \qquad
+        \Gamma_m=\Gamma_m^{\rm OP}+\Gamma_m^{\rm ER}+\Gamma_m^{\rm SE}.
+        """
+    )
+    st.markdown(
+        r"""
+        The calculation retains both $e^{-i\omega t}$ and $e^{+i\omega t}$
+        components of the real linearly polarized field. Thus a transition with
+        negative signed $\omega_m$ can contribute to a positive-frequency
+        resonance. The code expands the density matrix as
+        $\rho=\rho_0+\Omega_1\rho^{(1)}+O(\Omega_1^2)$ and solves directly
+        for $\rho^{(1)}$. It therefore never assigns a finite numerical value
+        to $\Omega_1$. The plotted quantity is the zero-drive susceptibility
+        $|\partial\langle F_i\rangle/\partial\Omega_1|_{\Omega_1=0}$,
+        equivalently $|\langle F_i\rangle|/\Omega_1$ within linear response.
+        When **Relaxation normalized** is selected, this susceptibility is
+        divided by $\Gamma_{m_*}$, where $m_*$ is the adjacent transition with
+        the largest $|D_m|$, with $D_m=P_m-P_{m-1}$ and
+        $\Gamma_{m_*}=\Gamma_{m_*}^{\rm OP}+\Gamma_{m_*}^{\rm ER}
+        +\Gamma_{m_*}^{\rm SE}$.
+        The adjacent transition matrix elements retain their full factors
+        $C_m=\sqrt{F(F+1)-m(m-1)}$.
+
+        This is a well-resolved local-coherence approximation. It does not feed
+        RF-induced populations or coherences back into the optical-pumping or
+        spin-exchange steady-state solver.
+        """
+    )
 
 
 # compact_section_title("D1/D2 hyperfine transition detunings")
@@ -3049,7 +3523,7 @@ with st.expander("Model and sign convention"):
         """
     )
 
-    st.write("In this population-only app, M_SE[p] is a nonlinear mean-field collision map. The steady-state population solver recomputes the ensemble electron marginal self-consistently, so population feedback is included. The app does not propagate coherences or pair correlations; displayed coherence rates and the optional population Jacobian are obtained by linearizing the full nonlinear map.")
+    st.write("For the zero-RF steady state, M_SE[p] is a nonlinear mean-field collision map. The population solver recomputes the ensemble electron marginal self-consistently, so population feedback is included. The RF plot then calculates adjacent coherences only to first order around that steady state; it does not propagate a finite-RF density matrix or pair correlations.")
 
     st.write("In the interface, each laser detuning is set relative to a selected pressure-shifted hyperfine transition. The entered pump rate R_pump is defined as the total absorption rate for atoms that are unpolarized within the ground hyperfine level F of that selected transition:")
 
