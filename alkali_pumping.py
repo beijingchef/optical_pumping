@@ -1,4 +1,4 @@
-# alkali_pumping_v4.10.py
+# alkali_pumping_v4.23.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -9,7 +9,7 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v4.10.py
+#   streamlit run alkali_pumping_v4.23.py
 #
 # Population model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + R_ER (M_ER - I)] p
@@ -21,7 +21,8 @@
 #   Both rotating components of the real RF field are retained. The coherence
 #   linewidth is Gamma_OP + Gamma_ER + Gamma_SE for each adjacent transition.
 #   The displayed response is the zero-drive susceptibility of the upper
-#   ground hyperfine spin only, |d<F_{+,i}>/dOmega_1|.
+#   ground hyperfine spin only, including amplitude, in-phase, and
+#   quadrature components of d<F_{+,i}>/dOmega_1.
 #   A static field parallel to the selected quantization axis adds a diagonal
 #   ground-state Zeeman shift and moves the adjacent-coherence resonances.
 #
@@ -818,12 +819,15 @@ def absolute_detuning_from_transition_choice(
     return float(selected["detP"] + relative_detuning_MHz), selected
 
 
-CONDITION_SCHEMA_VERSION = "4.10"
+CONDITION_SCHEMA_VERSION = "4.23"
 RF_CONDITION_KEYS = (
     "rf_axis",
     "rf_observable",
     "rf_frequency_lower_hz",
     "rf_frequency_upper_hz",
+    "rf_show_amplitude",
+    "rf_show_in_phase",
+    "rf_show_quadrature",
     "rf_relaxation_normalized",
 )
 OPTIONAL_CONDITION_KEYS = (*RF_CONDITION_KEYS, "bias_larmor_hz")
@@ -879,6 +883,9 @@ DEFAULT_STARTUP_CONDITION = {
     "rf_observable": "Fx",
     "rf_frequency_lower_hz": 0.0,
     "rf_frequency_upper_hz": 50.0,
+    "rf_show_amplitude": True,
+    "rf_show_in_phase": False,
+    "rf_show_quadrature": False,
     "rf_relaxation_normalized": False,
     "show_allowed_only": True,
     "show_rate_matrices": False,
@@ -895,7 +902,7 @@ def clean_condition_name(value):
 
 
 def build_condition_payload(values):
-    """Build the v4.10 JSON payload from current condition values."""
+    """Build the v4.23 JSON payload from current condition values."""
     conditions = {key: values.get(key) for key in CONDITION_KEYS}
     conditions["condition_name"] = clean_condition_name(
         conditions.get("condition_name")
@@ -933,7 +940,7 @@ def normalize_rf_frequency_bounds(prefer="lower"):
 
 
 def apply_loaded_condition_dict(payload):
-    """Apply a v4.10 condition file, with earlier-condition compatibility."""
+    """Apply a v4.23 condition file, with earlier-condition compatibility."""
     if not isinstance(payload, dict):
         raise ValueError("The loaded file is not a JSON object.")
     if payload.get("app") != "alkali_pumping":
@@ -1850,12 +1857,20 @@ def weak_rf_observable_susceptibility(
         rho = rho_0 + Omega_1 rho^(1) + O(Omega_1^2),
 
     and this function calculates rho^(1) without assigning any finite numerical
-    value to Omega_1. The returned array is therefore
+    value to Omega_1. Let chi_plus be the coefficient of exp(-i omega t).
+    The real time-domain susceptibility is written as
 
-        |d<F_{+,i}>(omega) / dOmega_1|_(Omega_1=0)
-        = |<F_{+,i}>(omega)| / Omega_1
+        d<F_{+,i}(t)>/dOmega_1
+        = X(omega) cos(omega t) + Y(omega) sin(omega t),
 
-    within the linear weak-drive approximation.
+    with
+
+        X = 2 Re[chi_plus],
+        Y = 2 Im[chi_plus],
+        A = sqrt(X^2 + Y^2) = 2 |chi_plus|.
+
+    The function returns A, X, and Y within the linear weak-drive
+    approximation.
 
     Every adjacent coherence is treated independently with its local rate
 
@@ -1873,14 +1888,21 @@ def weak_rf_observable_susceptibility(
     gamma_se = np.asarray(gamma_se, dtype=float)
 
     susceptibility_amplitude = np.zeros_like(frequencies_hz, dtype=float)
+    susceptibility_in_phase = np.zeros_like(frequencies_hz, dtype=float)
+    susceptibility_quadrature = np.zeros_like(frequencies_hz, dtype=float)
     susceptibility_phasor = np.zeros_like(frequencies_hz, dtype=complex)
 
     if len(ground_states) == 0:
-        return susceptibility_amplitude, {
-            "used_transitions": 0,
-            "nonpositive_linewidths": 0,
-            "target_F": np.nan,
-        }
+        return (
+            susceptibility_amplitude,
+            susceptibility_in_phase,
+            susceptibility_quadrature,
+            {
+                "used_transitions": 0,
+                "nonpositive_linewidths": 0,
+                "target_F": np.nan,
+            },
+        )
 
     if target_F is None:
         target_F = max(float(state["F"]) for state in ground_states)
@@ -1946,16 +1968,30 @@ def weak_rf_observable_susceptibility(
         )
         used_transitions += 1
 
-    # If d<O(t)>/dOmega_1 = chi_plus exp(-i omega t) + c.c., the oscillation
-    # susceptibility amplitude is 2 |chi_plus|.
-    susceptibility_amplitude = 2.0 * np.abs(susceptibility_phasor)
-    return susceptibility_amplitude, {
-        "used_transitions": used_transitions,
-        "nonpositive_linewidths": nonpositive_linewidths,
-        "drive_local_axis": drive_local_axis,
-        "observable_local_axis": observable_local_axis,
-        "target_F": target_F,
-    }
+    # With the RF reference chosen as cos(omega t),
+    #
+    #   d<O(t)>/dOmega_1 = X cos(omega t) + Y sin(omega t),
+    #
+    # where chi_plus is the coefficient of exp(-i omega t). Therefore
+    # X = 2 Re(chi_plus), Y = 2 Im(chi_plus), and A = 2 |chi_plus|.
+    susceptibility_in_phase = 2.0 * np.real(susceptibility_phasor)
+    susceptibility_quadrature = 2.0 * np.imag(susceptibility_phasor)
+    susceptibility_amplitude = np.hypot(
+        susceptibility_in_phase,
+        susceptibility_quadrature,
+    )
+    return (
+        susceptibility_amplitude,
+        susceptibility_in_phase,
+        susceptibility_quadrature,
+        {
+            "used_transitions": used_transitions,
+            "nonpositive_linewidths": nonpositive_linewidths,
+            "drive_local_axis": drive_local_axis,
+            "observable_local_axis": observable_local_axis,
+            "target_F": target_F,
+        },
+    )
 
 
 def largest_abs_Dm_relaxation_reference(df_pop, target_F=None):
@@ -2486,7 +2522,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.title("Alkali pumping v4.10: three pumps + ER + SE + weak RF")
+st.title("Alkali pumping v4.23: three pumps + ER + SE + weak RF")
 
 # ============================================================
 # Sidebar: all input condition values
@@ -2530,31 +2566,61 @@ with st.sidebar:
             padding-bottom: 0.15rem;
         }
         
-                /* Input height */
+                /* Keep the v4.14 compact field height and remove vertical padding. */
         div[data-baseweb="input"] > div {
             min-height: 20px;
             height: 20px;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
         }
 
-        /* Selectbox height */
+        div[data-baseweb="input"] input {
+            font-size: 16px !important;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
+        }
+
+        /* Selectboxes keep the same height with zero vertical padding. */
         div[data-baseweb="select"] > div {
             min-height: 20px;
             height: 20px;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
         }
 
-        /* Font size */
-        div[data-baseweb="input"] input {
-            font-size: 13px;
+        div[data-baseweb="select"] [role="combobox"] {
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
         }
 
         div[data-baseweb="select"] {
-            font-size: 13px;
+            font-size: 16px !important;
         }
 
-        /* Label */
+        div[data-baseweb="select"] [role="combobox"],
+        div[data-baseweb="select"] [role="combobox"] * {
+            font-size: 16px !important;
+        }
+
+        div[role="listbox"] [role="option"],
+        div[role="listbox"] [role="option"] * {
+            font-size: 16px !important;
+        }
+
         .stNumberInput label,
-        .stSelectbox label {
-            font-size: 13px;
+        .stSelectbox label,
+        .stTextInput label,
+        .stCheckbox label,
+        .stFileUploader label {
+            font-size: 14px !important;
+        }
+
+        .stNumberInput label p,
+        .stSelectbox label p,
+        .stTextInput label p,
+        .stCheckbox label p,
+        .stFileUploader label p {
+            font-size: 14px !important;
         }
         
         </style>
@@ -2837,6 +2903,9 @@ rf_axis = st.session_state.get("rf_axis", "x")
 rf_observable = st.session_state.get("rf_observable", "Fx")
 rf_frequency_lower_hz = float(st.session_state.get("rf_frequency_lower_hz", 0.0))
 rf_frequency_upper_hz = float(st.session_state.get("rf_frequency_upper_hz", 50.0))
+rf_show_amplitude = bool(st.session_state.get("rf_show_amplitude", True))
+rf_show_in_phase = bool(st.session_state.get("rf_show_in_phase", False))
+rf_show_quadrature = bool(st.session_state.get("rf_show_quadrature", False))
 rf_relaxation_normalized = bool(
     st.session_state.get("rf_relaxation_normalized", False)
 )
@@ -3055,7 +3124,12 @@ else:
     )
 
 if light_shift_available:
-    rf_susceptibility_amplitude, rf_response_info = weak_rf_observable_susceptibility(
+    (
+        rf_susceptibility_amplitude,
+        rf_susceptibility_in_phase,
+        rf_susceptibility_quadrature,
+        rf_response_info,
+    ) = weak_rf_observable_susceptibility(
         frequencies_hz=rf_frequencies_hz,
         ground_states=ground_states,
         populations=p_ss,
@@ -3070,6 +3144,8 @@ if light_shift_available:
     )
 else:
     rf_susceptibility_amplitude = np.full_like(rf_frequencies_hz, np.nan, dtype=float)
+    rf_susceptibility_in_phase = np.full_like(rf_frequencies_hz, np.nan, dtype=float)
+    rf_susceptibility_quadrature = np.full_like(rf_frequencies_hz, np.nan, dtype=float)
     rf_response_info = {
         "used_transitions": 0,
         "nonpositive_linewidths": 0,
@@ -3077,9 +3153,21 @@ else:
 
 rf_relaxation_reference = largest_abs_Dm_relaxation_reference(df_pop, target_F=rf_upper_F)
 rf_plot_amplitude = np.asarray(rf_susceptibility_amplitude, dtype=float).copy()
+
+# Display convention: flip both signed lock-in components by a common minus sign.
+# This is a 180-degree phase/polarity change used only to make the three-curve
+# plot more compact.  The amplitude, resonance positions, and linewidths are
+# unchanged.
+rf_plot_in_phase = -np.asarray(rf_susceptibility_in_phase, dtype=float).copy()
+rf_plot_quadrature = -np.asarray(rf_susceptibility_quadrature, dtype=float).copy()
 rf_relaxation_normalization_applied = False
 if rf_relaxation_normalized and rf_relaxation_reference.get("available", False):
-    rf_plot_amplitude /= rf_relaxation_reference["Gamma_m"]
+    # Relaxation normalization removes the 1/Gamma response scale by
+    # multiplying the susceptibility by the selected local coherence rate.
+    normalization_gamma = rf_relaxation_reference["Gamma_m"]
+    rf_plot_amplitude *= normalization_gamma
+    rf_plot_in_phase *= normalization_gamma
+    rf_plot_quadrature *= normalization_gamma
     rf_relaxation_normalization_applied = True
 
 df_F = population_by_F(df_pop)
@@ -3281,10 +3369,11 @@ with right:
 
 
 
-compact_section_title(f"Upper-hyperfine weak-RF susceptibility (F={rf_upper_F:g}): |⟨Fᵢ⟩| / Ω₁")
+compact_section_title(f"Upper-hyperfine weak-RF susceptibility (F={rf_upper_F:g})")
 
 # RF response region: a narrow control column and a wide plot column.
-rf_control_col, rf_plot_col = st.columns([1, 9], gap="small")
+# The plot shows amplitude, in-phase, and quadrature susceptibility components.
+rf_control_col, rf_plot_col = st.columns([0.15, 0.85], gap="small")
 
 with rf_control_col:
     rf_axis = st.selectbox(
@@ -3300,29 +3389,48 @@ with rf_control_col:
         format_func=lambda value: {"Fx": "F_x", "Fy": "F_y", "Fz": "F_z"}[value],
         help=f"Laboratory-frame spin component of the upper hyperfine manifold F={rf_upper_F:g}.",
     )
-    rf_frequency_lower_hz = st.number_input(
-        "Lower (Hz)",
-        min_value=0.0,
-        step=1.0,
-        format="%g",
-        key="rf_frequency_lower_hz",
-        on_change=normalize_rf_frequency_bounds,
-        args=("lower",),
+    rf_lower_col, rf_upper_col = st.columns(2, gap="xxsmall")
+    with rf_lower_col:
+        rf_frequency_lower_hz = st.number_input(
+            "Lower (Hz)",
+            min_value=0.0,
+            step=1.0,
+            format="%g",
+            key="rf_frequency_lower_hz",
+            on_change=normalize_rf_frequency_bounds,
+            args=("lower",),
+        )
+    with rf_upper_col:
+        rf_frequency_upper_hz = st.number_input(
+            "Upper (Hz)",
+            min_value=0.0,
+            step=1.0,
+            format="%g",
+            key="rf_frequency_upper_hz",
+            on_change=normalize_rf_frequency_bounds,
+            args=("upper",),
+        )
+
+    rf_show_amplitude = st.checkbox(
+        "Amplitude",
+        key="rf_show_amplitude",
+        help="Show the nonnegative RF susceptibility amplitude.",
     )
-    rf_frequency_upper_hz = st.number_input(
-        "Upper (Hz)",
-        min_value=0.0,
-        step=1.0,
-        format="%g",
-        key="rf_frequency_upper_hz",
-        on_change=normalize_rf_frequency_bounds,
-        args=("upper",),
+    rf_show_in_phase = st.checkbox(
+        "In phase",
+        key="rf_show_in_phase",
+        help="Show the signed in-phase RF susceptibility component.",
+    )
+    rf_show_quadrature = st.checkbox(
+        "Quadrature",
+        key="rf_show_quadrature",
+        help="Show the signed quadrature RF susceptibility component.",
     )
     rf_relaxation_normalized = st.checkbox(
         "Relaxation normalized",
         key="rf_relaxation_normalized",
         help=(
-            "Divide the plotted susceptibility by the total adjacent-coherence "
+            "Multiply the plotted susceptibility by the total adjacent-coherence "
             f"relaxation rate Gamma_m for the F={rf_upper_F:g} transition with the largest |D_m|."
         ),
     )
@@ -3349,30 +3457,70 @@ with rf_plot_col:
             )
         else:
             st.info("No valid adjacent Zeeman transitions were available for the RF response.")
+    elif not any((rf_show_amplitude, rf_show_in_phase, rf_show_quadrature)):
+        st.info("Select at least one RF curve: Amplitude, In phase, or Quadrature.")
     else:
-        rf_fig, rf_ax = plt.subplots(figsize=(8.6, 3.35))
+        rf_fig, rf_ax = plt.subplots(figsize=(8.6, 5))
         if len(rf_frequencies_hz) == 1:
-            rf_ax.plot(
-                rf_frequencies_hz,
-                rf_plot_amplitude,
-                marker="o",
-                linestyle="none",
-            )
+            if rf_show_amplitude:
+                rf_ax.plot(
+                    rf_frequencies_hz,
+                    rf_plot_amplitude,
+                    marker="o",
+                    linestyle="none",
+                    label="Amplitude",
+                )
+            if rf_show_in_phase:
+                rf_ax.plot(
+                    rf_frequencies_hz,
+                    rf_plot_in_phase,
+                    marker="s",
+                    linestyle="none",
+                    label="In phase",
+                )
+            if rf_show_quadrature:
+                rf_ax.plot(
+                    rf_frequencies_hz,
+                    rf_plot_quadrature,
+                    marker="^",
+                    linestyle="none",
+                    label="Quadrature",
+                )
         else:
-            rf_ax.plot(rf_frequencies_hz, rf_plot_amplitude)
+            if rf_show_amplitude:
+                rf_ax.plot(
+                    rf_frequencies_hz,
+                    rf_plot_amplitude,
+                    label="Amplitude",
+                )
+            if rf_show_in_phase:
+                rf_ax.plot(
+                    rf_frequencies_hz,
+                    rf_plot_in_phase,
+                    linestyle="--",
+                    label="In phase",
+                )
+            if rf_show_quadrature:
+                rf_ax.plot(
+                    rf_frequencies_hz,
+                    rf_plot_quadrature,
+                    linestyle=":",
+                    label="Quadrature",
+                )
+        rf_ax.axhline(0.0, linewidth=0.8, alpha=0.45)
         rf_ax.set_xlabel("RF frequency (Hz)")
         if rf_relaxation_normalization_applied:
             rf_ax.set_ylabel(
-                rf"$|\langle F_{{+,{rf_observable[-1].lower()}}}\rangle|/"
-                rf"(\Omega_1\Gamma_{{m_*}})$ "
-                rf"($\hbar\,\mathrm{{s}}^2$/atom)"
+                rf"$\Gamma_{{m_*}}\langle F_{{+,{rf_observable[-1].lower()}}}\rangle/\Omega_1$ "
+                rf"($\hbar$/atom)"
             )
         else:
             rf_ax.set_ylabel(
-                rf"$|\langle F_{{+,{rf_observable[-1].lower()}}}\rangle|/\Omega_1$ "
+                rf"$\langle F_{{+,{rf_observable[-1].lower()}}}\rangle/\Omega_1$ "
                 rf"($\hbar\,\mathrm{{s}}$/atom)"
             )
         rf_ax.set_title(rf"$F_+={rf_upper_F:g},\quad B_{{\mathrm{{rf}}}}\parallel {rf_axis}$")
+        rf_ax.legend(loc="best", frameon=False)
         rf_ax.grid(True, alpha=0.25)
         rf_fig.subplots_adjust(
             left=0.105,
@@ -3382,21 +3530,68 @@ with rf_plot_col:
         )
         st.pyplot(rf_fig, width="stretch")
 
-        if rf_relaxation_normalized:
-            if rf_relaxation_normalization_applied:
-                ref = rf_relaxation_reference
-                st.caption(
-                    "Relaxation normalization: "
-                    f"upper-manifold largest |D_m| at F={ref['F']:g}, m={ref['m']:g}; "
-                    f"D_m={ref['D_m']:.6g}, Gamma_m={ref['Gamma_m']:.6g} s^-1 "
-                    f"(OP={ref['Gamma_OP']:.6g}, ER={ref['Gamma_ER']:.6g}, "
-                    f"SE={ref['Gamma_SE']:.6g} s^-1)."
-                )
+        normalization_caption_col, response_tip_col = st.columns(
+            [0.92, 0.08], gap="small"
+        )
+        with normalization_caption_col:
+            if rf_relaxation_normalized:
+                if rf_relaxation_normalization_applied:
+                    ref = rf_relaxation_reference
+                    st.caption(
+                        "Relaxation normalization: "
+                        f"upper-manifold largest |D_m| at F={ref['F']:g}, m={ref['m']:g}; "
+                        f"D_m={ref['D_m']:.3f}, Gamma_m={ref['Gamma_m']:.1f} s^-1 "
+                        f"(OP={ref['Gamma_OP']:.1f}, ER={ref['Gamma_ER']:.1f}, "
+                        f"SE={ref['Gamma_SE']:.1f} s^-1).",
+                        text_alignment = "center"
+                    )
+                else:
+                    st.warning(
+                        "Relaxation normalization could not be applied: "
+                        + rf_relaxation_reference.get("reason", "unknown reason")
+                        + "."
+                    )
             else:
-                st.warning(
-                    "Relaxation normalization could not be applied: "
-                    + rf_relaxation_reference.get("reason", "unknown reason")
-                    + "."
+                st.caption("Relaxation normalization: off.")
+
+        # The default Streamlit popover is about 20 rem wide.  The RF-response
+        # explanation contains several equations, so make only this popover 50%
+        # wider (30 rem) while leaving the Zeeman-table popover unchanged.
+        st.markdown(
+            """
+            <style>
+            [data-baseweb="popover"]:has(.rf-response-popover-marker),
+            [data-baseweb="popover"]:has(.rf-response-popover-marker) > div {
+                width: 30rem !important;
+                min-width: 30rem !important;
+                max-width: min(90vw, 30rem) !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        with response_tip_col:
+            with st.popover("❓"):
+                st.markdown(
+                    "<span class='rf-response-popover-marker'></span>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    r"""
+                    The calculated lock-in components use the RF drive
+                    $\cos(\omega t)$ as their phase reference:
+                    $X=2\operatorname{Re}\chi_+$ and
+                    $Y=2\operatorname{Im}\chi_+$.
+
+                    For display, the graph plots
+                    $X_{\rm plot}=-X$ and $Y_{\rm plot}=-Y$. Multiplying both
+                    signed components by $-1$ is a common $180^\circ$ phase or
+                    detector-polarity change. It leaves the amplitude
+                    $A=\sqrt{X^2+Y^2}$, resonance positions, linewidths, and all
+                    physical conclusions unchanged. The sign flip is used only
+                    to make the three-curve plot more compact.
+                    """
                 )
 
         if rf_response_info.get("nonpositive_linewidths", 0) > 0:
@@ -3438,15 +3633,23 @@ with st.expander("Weak-RF response model", expanded=False):
         resonance. The code expands the density matrix as
         $\rho=\rho_0+\Omega_1\rho^{(1)}+O(\Omega_1^2)$ and solves directly
         for $\rho^{(1)}$. It therefore never assigns a finite numerical value
-        to $\Omega_1$. The plotted quantity is the upper-manifold zero-drive
-        susceptibility
-        $|\partial\langle F_{+,i}\rangle/\partial\Omega_1|_{\Omega_1=0}$,
-        equivalently $|\langle F_{+,i}\rangle|/\Omega_1$ within linear
-        response. The expectation value is taken with the upper-manifold block
+        to $\Omega_1$. If $\chi_+$ denotes the coefficient of
+        $e^{-i\omega t}$, the real response is written as
+        $\partial\langle F_{+,i}(t)\rangle/\partial\Omega_1
+        =X(\omega)\cos\omega t+Y(\omega)\sin\omega t$, with
+        $X=2\operatorname{Re}\chi_+$,
+        $Y=2\operatorname{Im}\chi_+$, and amplitude
+        $A=\sqrt{X^2+Y^2}=2|\chi_+|$. The graph displays the unchanged
+        amplitude together with $X_{\rm plot}=-X$ and $Y_{\rm plot}=-Y$.
+        This common sign reversal is a $180^\circ$ phase/polarity convention
+        used only to make the multi-curve plot more compact; it does not change
+        the response amplitude or resonance physics. The underlying convention
+        takes the RF drive $\cos\omega t$ as the in-phase reference. The
+        expectation value is taken with the upper-manifold block
         of the full density matrix, so it retains the actual upper-manifold
         population rather than being renormalized to unit population within $F_+$.
         When **Relaxation normalized** is selected, this susceptibility is
-        divided by $\Gamma_{m_*}$, where $m_*$ is the adjacent transition
+        multiplied by $\Gamma_{m_*}$, where $m_*$ is the adjacent transition
         within $F_+$ with the largest $|D_m|$, with $D_m=P_m-P_{m-1}$ and
         $\Gamma_{m_*}=\Gamma_{m_*}^{\rm OP}+\Gamma_{m_*}^{\rm ER}
         +\Gamma_{m_*}^{\rm SE}$.
