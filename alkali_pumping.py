@@ -1,4 +1,4 @@
-# alkali_pumping_v3.16.py
+# alkali_pumping_v3.17.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -8,7 +8,7 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v3.16.py
+#   streamlit run alkali_pumping_v3.17.py
 #
 # Model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + R_ER (M_ER - I)] p
@@ -577,7 +577,7 @@ def hyperfine_transition_table(
         pressure_shift = n2_coeffs[line]["shift"] * n2_pressure_torr
         pressure_width = n2_coeffs[line]["width"] * n2_pressure_torr
         total_lorentz = atom[line]["gamma_nat_MHz"] + pressure_width
-        doppler = doppler_fwhm_MHz(atom, line, st.session_state.get("temperature_C_for_table", 25.0))
+        doppler = doppler_fwhm_MHz(atom, line, st.session_state.get("temperature_C_for_table", 23.5))
 
         for g in ground_Fs:
             Fg = g["F"]
@@ -739,13 +739,13 @@ CONDITION_KEYS = (
 )
 
 
-# Built-in startup condition, taken from ps400(1).json.
+# Built-in startup condition: default-ps400.
 DEFAULT_STARTUP_CONDITION = {
-    "condition_name": "ps400",
+    "condition_name": "default-ps400",
     "atom_name": "Rb87",
-    "gamma_ER": 2.0,
+    "gamma_ER": 4.0,
     "q_axis": "z",
-    "temperature_C_for_table": 23.0,
+    "temperature_C_for_table": 23.5,
     "n2_pressure_torr": 0.0,
     "include_spin_exchange": True,
     "D1_width": 17.8,
@@ -2115,9 +2115,9 @@ with st.sidebar:
     if "n2_pressure_torr" not in st.session_state:
         st.session_state["n2_pressure_torr"] = 0.0
     if "temperature_C_for_table" not in st.session_state:
-        st.session_state["temperature_C_for_table"] = 25.0
+        st.session_state["temperature_C_for_table"] = 23.5
     if "gamma_ER" not in st.session_state:
-        st.session_state["gamma_ER"] = 1.0
+        st.session_state["gamma_ER"] = 4.0
     if "include_spin_exchange" not in st.session_state:
         st.session_state["include_spin_exchange"] = True
 
@@ -2176,7 +2176,7 @@ with st.sidebar:
 
     st.header("condition")
     if "condition_name" not in st.session_state:
-        st.session_state["condition_name"] = "default"
+        st.session_state["condition_name"] = "default-ps400"
 
     # Keep the controls visually at the top, but populate this placeholder only
     # after every sidebar widget has been instantiated. This ensures that the
