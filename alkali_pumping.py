@@ -1,4 +1,4 @@
-# alkali_pumping_v4.7.py
+# alkali_pumping_v4.10.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -9,7 +9,7 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v4.7.py
+#   streamlit run alkali_pumping_v4.10.py
 #
 # Population model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + R_ER (M_ER - I)] p
@@ -20,7 +20,10 @@
 #   coherences are calculated to first order in a linearly polarized RF field.
 #   Both rotating components of the real RF field are retained. The coherence
 #   linewidth is Gamma_OP + Gamma_ER + Gamma_SE for each adjacent transition.
-#   The displayed response is the zero-drive susceptibility |d<F_i>/dOmega_1|.
+#   The displayed response is the zero-drive susceptibility of the upper
+#   ground hyperfine spin only, |d<F_{+,i}>/dOmega_1|.
+#   A static field parallel to the selected quantization axis adds a diagonal
+#   ground-state Zeeman shift and moves the adjacent-coherence resonances.
 #
 # The app does not propagate a finite-RF steady state, excited-state coherences,
 # pair correlations, or optical propagation effects. Spin exchange is included
@@ -98,6 +101,86 @@ ATOMS = {
         "D2": {"Jp": 3/2, "A": 6.093, "B": 2.786, "gamma_nat_MHz": 6.04},
     },
 }
+
+
+# Ground-state magnetic constants used for the linear Zeeman shift.
+# The nuclear moments are in nuclear magnetons. The hyperfine g_F values are
+# calculated in Bohr-magneton units, including the small nuclear contribution.
+GROUND_STATE_GJ = 2.00233113
+MU_N_OVER_MU_B = 1.0 / 1836.15267343
+NUCLEAR_MAGNETIC_MOMENT_MU_N = {
+    "Rb87": 2.751818,
+    "Rb85": 1.35335171,
+    "Cs133": 2.582025,
+    "K39": 0.3914662,
+}
+
+
+def ground_hyperfine_lande_g(atom_name, atom, F):
+    """Return the ground-state hyperfine Lande g factor for one F manifold."""
+    I = float(atom["I"])
+    J = float(atom["ground"]["J"])
+    F = float(F)
+    if F <= 0.0:
+        return 0.0
+
+    denominator = 2.0 * F * (F + 1.0)
+    electronic_projection = (
+        F * (F + 1.0) + J * (J + 1.0) - I * (I + 1.0)
+    ) / denominator
+    nuclear_projection = (
+        F * (F + 1.0) + I * (I + 1.0) - J * (J + 1.0)
+    ) / denominator
+
+    mu_I_mu_N = NUCLEAR_MAGNETIC_MOMENT_MU_N.get(atom_name, 0.0)
+    g_I_bohr = (mu_I_mu_N / I) * MU_N_OVER_MU_B if I > 0.0 else 0.0
+    return float(
+        GROUND_STATE_GJ * electronic_projection
+        + g_I_bohr * nuclear_projection
+    )
+
+
+def ground_zeeman_shifts_hz(
+    atom_name,
+    atom,
+    ground_states,
+    upper_manifold_larmor_hz,
+):
+    """Return linear ground-state Zeeman shifts nu_B(F,m) in Hz.
+
+    The entered signed frequency is defined as the adjacent-level Larmor
+    frequency of the upper ground hyperfine manifold F_+=I+1/2. For every
+    displayed manifold,
+
+        nu_B(F,m) = m [g_F/g_(F_+)] nu_B,input.
+
+    Thus the lower ground hyperfine manifold automatically receives its
+    physically opposite Zeeman slope, including the small nuclear correction.
+    """
+    upper_F = max(float(state["F"]) for state in ground_states)
+    g_upper = ground_hyperfine_lande_g(atom_name, atom, upper_F)
+    if abs(g_upper) < 1e-15:
+        raise ValueError("Upper-manifold hyperfine g factor is numerically zero.")
+
+    g_by_F = {
+        float(F): ground_hyperfine_lande_g(atom_name, atom, float(F))
+        for F in sorted({float(state["F"]) for state in ground_states})
+    }
+    ratio_by_F = {F: gF / g_upper for F, gF in g_by_F.items()}
+    shifts = np.array([
+        float(state["m"])
+        * ratio_by_F[float(state["F"])]
+        * float(upper_manifold_larmor_hz)
+        for state in ground_states
+    ], dtype=float)
+
+    return shifts, {
+        "upper_F": upper_F,
+        "g_upper": g_upper,
+        "g_by_F": g_by_F,
+        "ratio_by_F": ratio_by_F,
+        "input_larmor_hz": float(upper_manifold_larmor_hz),
+    }
 
 
 # ============================================================
@@ -735,7 +818,7 @@ def absolute_detuning_from_transition_choice(
     return float(selected["detP"] + relative_detuning_MHz), selected
 
 
-CONDITION_SCHEMA_VERSION = "4.7"
+CONDITION_SCHEMA_VERSION = "4.10"
 RF_CONDITION_KEYS = (
     "rf_axis",
     "rf_observable",
@@ -743,9 +826,10 @@ RF_CONDITION_KEYS = (
     "rf_frequency_upper_hz",
     "rf_relaxation_normalized",
 )
+OPTIONAL_CONDITION_KEYS = (*RF_CONDITION_KEYS, "bias_larmor_hz")
 CONDITION_KEYS = (
     "condition_name",
-    "atom_name", "gamma_ER", "q_axis", "temperature_C_for_table", "n2_pressure_torr",
+    "atom_name", "gamma_ER", "q_axis", "bias_larmor_hz", "temperature_C_for_table", "n2_pressure_torr",
     "include_spin_exchange",
     "D1_width", "D2_width", "D1_shift", "D2_shift",
     "line1", "transition1", "det_rel1", "rate1", "k1", "pol1",
@@ -755,7 +839,7 @@ CONDITION_KEYS = (
     "show_allowed_only", "show_rate_matrices",
 )
 LEGACY_CONDITION_KEYS = tuple(
-    key for key in CONDITION_KEYS if key not in RF_CONDITION_KEYS
+    key for key in CONDITION_KEYS if key not in OPTIONAL_CONDITION_KEYS
 )
 
 
@@ -765,6 +849,7 @@ DEFAULT_STARTUP_CONDITION = {
     "atom_name": "Rb87",
     "gamma_ER": 4.0,
     "q_axis": "z",
+    "bias_larmor_hz": 0.0,
     "temperature_C_for_table": 23.5,
     "n2_pressure_torr": 0.0,
     "include_spin_exchange": True,
@@ -810,7 +895,7 @@ def clean_condition_name(value):
 
 
 def build_condition_payload(values):
-    """Build the v4.7 JSON payload from current condition values."""
+    """Build the v4.10 JSON payload from current condition values."""
     conditions = {key: values.get(key) for key in CONDITION_KEYS}
     conditions["condition_name"] = clean_condition_name(
         conditions.get("condition_name")
@@ -848,7 +933,7 @@ def normalize_rf_frequency_bounds(prefer="lower"):
 
 
 def apply_loaded_condition_dict(payload):
-    """Apply a v4.7 condition file, with earlier-condition compatibility."""
+    """Apply a v4.10 condition file, with earlier-condition compatibility."""
     if not isinstance(payload, dict):
         raise ValueError("The loaded file is not a JSON object.")
     if payload.get("app") != "alkali_pumping":
@@ -1743,8 +1828,17 @@ def weak_rf_observable_susceptibility(
     q_axis,
     rf_axis,
     observable,
+    target_F=None,
 ):
-    """Return the zero-drive RF susceptibility |d<F_i>/dOmega_1|.
+    """Return the zero-drive RF susceptibility of one hyperfine manifold.
+
+    Only adjacent coherences within ``target_F`` contribute. If ``target_F``
+    is omitted, the upper ground hyperfine manifold (largest F) is used. The
+    returned observable is therefore the upper-manifold spin component
+
+        <F_{+,i}> = Tr[rho_{F+} F_i^(F+)],
+
+    not the coherent sum of the two ground hyperfine spin observables.
 
     The applied field is linearly polarized along the selected laboratory
     axis i = x, y, or z:
@@ -1758,8 +1852,8 @@ def weak_rf_observable_susceptibility(
     and this function calculates rho^(1) without assigning any finite numerical
     value to Omega_1. The returned array is therefore
 
-        |d<F_i>(omega) / dOmega_1|_(Omega_1=0)
-        = |<F_i>(omega)| / Omega_1
+        |d<F_{+,i}>(omega) / dOmega_1|_(Omega_1=0)
+        = |<F_{+,i}>(omega)| / Omega_1
 
     within the linear weak-drive approximation.
 
@@ -1785,7 +1879,12 @@ def weak_rf_observable_susceptibility(
         return susceptibility_amplitude, {
             "used_transitions": 0,
             "nonpositive_linewidths": 0,
+            "target_F": np.nan,
         }
+
+    if target_F is None:
+        target_F = max(float(state["F"]) for state in ground_states)
+    target_F = float(target_F)
 
     drive_local_axis = lab_axis_in_local_frame(q_axis, rf_axis)
     observable_lab_axis = observable[-1].lower()
@@ -1802,6 +1901,8 @@ def weak_rf_observable_susceptibility(
 
     for a_idx, state in enumerate(ground_states):
         F = float(state["F"])
+        if not np.isclose(F, target_F):
+            continue
         m = float(state["m"])
         b_idx = state_index.get((F, m - 1.0))
         if b_idx is None or not np.isfinite(transition_hz[a_idx]):
@@ -1853,14 +1954,17 @@ def weak_rf_observable_susceptibility(
         "nonpositive_linewidths": nonpositive_linewidths,
         "drive_local_axis": drive_local_axis,
         "observable_local_axis": observable_local_axis,
+        "target_F": target_F,
     }
 
 
-def largest_abs_Dm_relaxation_reference(df_pop):
-    """Return the total adjacent-coherence relaxation rate at the largest |D_m|.
+def largest_abs_Dm_relaxation_reference(df_pop, target_F=None):
+    """Return the relaxation rate at the largest |D_m| in one F manifold.
 
-    Here D_m = P_m - P_(m-1), as displayed in the Zeeman table, but the
-    reference transition is selected by the largest absolute magnitude |D_m|.
+    By default, the upper ground hyperfine manifold (largest F in ``df_pop``)
+    is used. Here D_m = P_m - P_(m-1), as displayed in the Zeeman table, and
+    the reference transition is selected by the largest absolute magnitude
+    |D_m| within that same manifold.
     Rows without an adjacent lower-m partner are excluded. The total local
     relaxation rate is
 
@@ -1876,13 +1980,26 @@ def largest_abs_Dm_relaxation_reference(df_pop):
             "reason": "required columns are missing",
         }
 
+    if target_F is None:
+        finite_F_values = df_pop.loc[
+            np.isfinite(df_pop["F"].to_numpy(dtype=float)), "F"
+        ].to_numpy(dtype=float)
+        if finite_F_values.size == 0:
+            return {
+                "available": False,
+                "reason": "no finite hyperfine manifold was found",
+            }
+        target_F = float(np.max(finite_F_values))
+    target_F = float(target_F)
+
     candidate = df_pop.loc[:, list(required)].copy()
+    candidate = candidate.loc[np.isclose(candidate["F"].to_numpy(dtype=float), target_F)]
     finite_D = np.isfinite(candidate["population_difference"].to_numpy(dtype=float))
     candidate = candidate.loc[finite_D]
     if candidate.empty:
         return {
             "available": False,
-            "reason": "no adjacent transition has a finite D_m",
+            "reason": f"no adjacent transition in F={target_F:g} has a finite D_m",
         }
 
     # Select the adjacent transition with the largest population-difference magnitude.
@@ -1971,28 +2088,43 @@ def add_population_difference_column(df_pop):
 
 
 def add_nu_m_column(df_pop):
-    """Add nu_m = nu^(LS)_m - nu^(LS)_(m-1) within each ground hyperfine manifold F.
+    """Add the total adjacent-transition frequency nu_m in Hz.
 
-    The state-resolved light-shift frequency nu^(LS) is in Hz. The lowest m state in each F manifold has
-    no adjacent lower-m partner, so its difference is left blank.
+    For each adjacent coherence rho_(m,m-1) within one F manifold,
+
+        nu_m = [nu_LS(F,m) + nu_B(F,m)]
+             - [nu_LS(F,m-1) + nu_B(F,m-1)].
+
+    The lowest-m state has no adjacent lower-m partner and is left blank. If
+    the optical light-shift Hamiltonian is not diagonal, nu_LS is unavailable
+    and the total nu_m is left blank even though the diagonal Zeeman column is
+    still shown.
     """
     df = df_pop.copy()
     df["nu_m"] = np.nan
 
-    if "nu_LS" not in df.columns:
+    if "nu_LS" not in df.columns or "nu_B" not in df.columns:
         return df
 
-    for F_value, group in df.groupby("F", sort=False):
+    for _F_value, group in df.groupby("F", sort=False):
         group_sorted = group.sort_values("m")
-        nu_by_m = dict(zip(group_sorted["m"], group_sorted["nu_LS"]))
+        total_frequency_by_m = {
+            float(row["m"]): (
+                float(row["nu_LS"]) + float(row["nu_B"])
+                if pd.notna(row["nu_LS"]) and pd.notna(row["nu_B"])
+                else np.nan
+            )
+            for _, row in group_sorted.iterrows()
+        }
         for row_index, row in group_sorted.iterrows():
-            m_value = row["m"]
+            m_value = float(row["m"])
             previous_m = m_value - 1.0
-            if previous_m in nu_by_m:
-                current_nu = row["nu_LS"]
-                previous_nu = nu_by_m[previous_m]
-                if pd.notna(current_nu) and pd.notna(previous_nu):
-                    df.loc[row_index, "nu_m"] = current_nu - previous_nu
+            if previous_m not in total_frequency_by_m:
+                continue
+            current_nu = total_frequency_by_m[m_value]
+            previous_nu = total_frequency_by_m[previous_m]
+            if np.isfinite(current_nu) and np.isfinite(previous_nu):
+                df.loc[row_index, "nu_m"] = current_nu - previous_nu
 
     return df
 
@@ -2222,6 +2354,7 @@ def render_zeeman_properties_table_html(df):
         ("Pₘ", "P<sub>m</sub>", None, ".3f"),
         ("Dₘ", "D<sub>m</sub>", None, ".3f"),
         ("ν^{LS} (Hz)", "ν<sup>LS</sup>", "Hz", ".1f"),
+        ("ν^{B} (Hz)", "ν<sup>B</sup>", "Hz", ".1f"),
         ("ν_m (Hz)", "ν<sub>m</sub>", "Hz", ".1f"),
         ("Λ (s⁻¹)", "Λ", "s<sup>−1</sup>", ".1f"),
         ("G^{OP} (s^-1)", "G<sup>OP</sup>", "s<sup>−1</sup>", ".1f"),
@@ -2353,7 +2486,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.title("Alkali pumping v4.7: three pumps + ER + SE + weak RF")
+st.title("Alkali pumping v4.10: three pumps + ER + SE + weak RF")
 
 # ============================================================
 # Sidebar: all input condition values
@@ -2469,7 +2602,7 @@ with st.sidebar:
         st.session_state["D2_shift"] = DEFAULT_N2_COEFFS[atom_name]["D2"]["shift"]
         st.session_state["_last_atom_name_for_defaults"] = atom_name
 
-    cell_row_col1, cell_row_col2, cell_row_col3 = st.columns(3, gap="small")
+    cell_row_col1, cell_row_col2 = st.columns(2, gap="small")
     with cell_row_col1:
         include_spin_exchange = st.checkbox(
             "Include spin exchange",
@@ -2484,13 +2617,6 @@ with st.sidebar:
             step=1.0,
             format="%.1f",
             key="gamma_ER",
-        )
-    with cell_row_col3:
-        q_axis = st.selectbox(
-            "Quantization axis",
-            ["z", "x", "y"],
-            index=0,
-            key="q_axis",
         )
 
     se_rate_preview = spin_exchange_rate_info(atom_name, atom, temperature_C)
@@ -2531,6 +2657,38 @@ with st.sidebar:
             )
 
         st.caption("Broadening and shifts are in MHz/Torr. Negative shift = red shift.")
+
+    axis_col, bias_col = st.columns(2, gap="small")
+    with axis_col:
+        q_axis = st.selectbox(
+            "Quantization axis",
+            ["z", "x", "y"],
+            index=0,
+            key="q_axis",
+        )
+    with bias_col:
+        bias_larmor_hz = st.number_input(
+            r"$B_q$ Larmor frequency (Hz)",
+            step=1.0,
+            format="%g",
+            key="bias_larmor_hz",
+            help=(
+                "Signed adjacent-level Larmor frequency of the upper ground "
+                "hyperfine manifold. The lower manifold uses its calculated "
+                "hyperfine-g-factor ratio and therefore generally has the "
+                "opposite Zeeman slope. In this model the static field is "
+                "parallel to the quantization axis and enters only as a "
+                "diagonal linear-Zeeman energy shift. It changes the displayed "
+                "state shifts nu^B and the total adjacent-transition frequency "
+                "nu_m, so it shifts the RF resonances and changes the response "
+                "at a fixed RF frequency. It does not change the zero-RF "
+                "steady-state populations, D_m, optical-pumping rates, ER or SE "
+                "population flows, or the adjacent-coherence relaxation rates. "
+                "The model does not include Zeeman corrections to optical "
+                "detunings, nonlinear Zeeman shifts, Breit-Rabi mixing, or "
+                "field-dependent relaxation."
+            ),
+        )
 
     n2_coeffs = {
         "D1": {"width": D1_width, "shift": D1_shift},
@@ -2820,6 +2978,12 @@ nu_LS, light_shift_available = total_nu_LS_from_diagnostics(
     beam_inputs,
     diagnostics,
 )
+nu_B, bias_zeeman_info = ground_zeeman_shifts_hz(
+    atom_name,
+    atom,
+    ground_states,
+    bias_larmor_hz,
+)
 G_OP_by_state = total_G_OP_by_ground_state(
     ground_states,
     diagnostics,
@@ -2866,6 +3030,7 @@ df_pop = pd.DataFrame({
     "m": [g["m"] for g in ground_states],
     "population": p_ss,
     "nu_LS": nu_LS,
+    "nu_B": nu_B,
     "Lambda": Lambda_by_state,
     "G_OP": G_OP_by_state,
     "G_ER": G_ER,
@@ -2876,6 +3041,9 @@ df_pop = pd.DataFrame({
 df_pop = add_population_difference_column(df_pop)
 df_pop = add_nu_m_column(df_pop)
 df_pop = add_adjacent_optical_relaxation_columns(df_pop)
+
+# The RF observable is restricted to the upper ground hyperfine manifold.
+rf_upper_F = max(float(state["F"]) for state in ground_states)
 
 if np.isclose(rf_frequency_lower_hz, rf_frequency_upper_hz):
     rf_frequencies_hz = np.array([rf_frequency_lower_hz], dtype=float)
@@ -2898,6 +3066,7 @@ if light_shift_available:
         q_axis=q_axis,
         rf_axis=rf_axis,
         observable=rf_observable,
+        target_F=rf_upper_F,
     )
 else:
     rf_susceptibility_amplitude = np.full_like(rf_frequencies_hz, np.nan, dtype=float)
@@ -2906,7 +3075,7 @@ else:
         "nonpositive_linewidths": 0,
     }
 
-rf_relaxation_reference = largest_abs_Dm_relaxation_reference(df_pop)
+rf_relaxation_reference = largest_abs_Dm_relaxation_reference(df_pop, target_F=rf_upper_F)
 rf_plot_amplitude = np.asarray(rf_susceptibility_amplitude, dtype=float).copy()
 rf_relaxation_normalization_applied = False
 if rf_relaxation_normalized and rf_relaxation_reference.get("available", False):
@@ -2940,6 +3109,7 @@ df_pop_display = df_pop.rename(columns={
     "population": "Pₘ",
     "population_difference": "Dₘ",
     "nu_LS": "ν^{LS} (Hz)",
+    "nu_B": "ν^{B} (Hz)",
     "nu_m": "ν_m (Hz)",
     "Lambda": "Λ (s⁻¹)",
     "G_OP": "G^{OP} (s^-1)",
@@ -2958,6 +3128,7 @@ df_pop_display = df_pop_display[[
     "Pₘ",
     "Dₘ",
     "ν^{LS} (Hz)",
+    "ν^{B} (Hz)",
     "ν_m (Hz)",
     "Λ (s⁻¹)",
     "G^{OP} (s^-1)",
@@ -3088,7 +3259,8 @@ with right:
             st.markdown(
                 r"""
                 $\small D_m=P_m-P_{m-1}$ is the population difference between adjacent Zeeman sublevels.  
-                $\small \nu_m=\nu^{\mathrm{LS}}_{m}-\nu^{\mathrm{LS}}_{m-1}$ is the adjacent-sublevel resonance frequency.  
+                $\small \nu_m=[\nu^{\mathrm{LS}}_{m}+\nu^{B}_{m}]-[\nu^{\mathrm{LS}}_{m-1}+\nu^{B}_{m-1}]$ is the total adjacent-sublevel resonance frequency.  
+                $\small \nu^{B}_{F,m}=m(g_F/g_{F_+})\nu_{B,+}$ is the static-field Zeeman shift, where the entered $\nu_{B,+}$ is the signed upper-manifold Larmor frequency.  
                 $\small G^{\mathrm{ER}}_{m}$ is the signed net fractional ER rate of population of sublevel m; positive means loss.  
                 $\small G^{\mathrm{SE}}_{m}=-(\dot P_m)_{\mathrm{SE}}/P_m$ is the exact signed net fractional SE population flow evaluated with the full nonlinear map; positive means loss. It is not a small-signal eigenmode decay rate.  
                 $\small \Lambda_{m}$ is the total repopulation rate into $\small \lvert F,m\rangle$ divided by its steady-state population.  
@@ -3109,7 +3281,7 @@ with right:
 
 
 
-compact_section_title("Weak-RF susceptibility: |⟨Fᵢ⟩| / Ω₁")
+compact_section_title(f"Upper-hyperfine weak-RF susceptibility (F={rf_upper_F:g}): |⟨Fᵢ⟩| / Ω₁")
 
 # RF response region: a narrow control column and a wide plot column.
 rf_control_col, rf_plot_col = st.columns([1, 9], gap="small")
@@ -3126,7 +3298,7 @@ with rf_control_col:
         ["Fx", "Fy", "Fz"],
         key="rf_observable",
         format_func=lambda value: {"Fx": "F_x", "Fy": "F_y", "Fz": "F_z"}[value],
-        help="Laboratory-frame spin component used for the zero-drive RF susceptibility.",
+        help=f"Laboratory-frame spin component of the upper hyperfine manifold F={rf_upper_F:g}.",
     )
     rf_frequency_lower_hz = st.number_input(
         "Lower (Hz)",
@@ -3151,7 +3323,7 @@ with rf_control_col:
         key="rf_relaxation_normalized",
         help=(
             "Divide the plotted susceptibility by the total adjacent-coherence "
-            "relaxation rate Gamma_m for the transition with the largest |D_m|."
+            f"relaxation rate Gamma_m for the F={rf_upper_F:g} transition with the largest |D_m|."
         ),
     )
 
@@ -3191,16 +3363,16 @@ with rf_plot_col:
         rf_ax.set_xlabel("RF frequency (Hz)")
         if rf_relaxation_normalization_applied:
             rf_ax.set_ylabel(
-                rf"$|\langle F_{{{rf_observable[-1].lower()}}}\rangle|/"
+                rf"$|\langle F_{{+,{rf_observable[-1].lower()}}}\rangle|/"
                 rf"(\Omega_1\Gamma_{{m_*}})$ "
                 rf"($\hbar\,\mathrm{{s}}^2$/atom)"
             )
         else:
             rf_ax.set_ylabel(
-                rf"$|\langle F_{{{rf_observable[-1].lower()}}}\rangle|/\Omega_1$ "
+                rf"$|\langle F_{{+,{rf_observable[-1].lower()}}}\rangle|/\Omega_1$ "
                 rf"($\hbar\,\mathrm{{s}}$/atom)"
             )
-        rf_ax.set_title(rf"$B_{{\mathrm{{rf}}}}\parallel {rf_axis}$")
+        rf_ax.set_title(rf"$F_+={rf_upper_F:g},\quad B_{{\mathrm{{rf}}}}\parallel {rf_axis}$")
         rf_ax.grid(True, alpha=0.25)
         rf_fig.subplots_adjust(
             left=0.105,
@@ -3215,10 +3387,10 @@ with rf_plot_col:
                 ref = rf_relaxation_reference
                 st.caption(
                     "Relaxation normalization: "
-                    f"largest |D_m| at F={ref['F']:g}, m={ref['m']:g}; "
-                    f"D_m={ref['D_m']:.3f}, Gamma_m={ref['Gamma_m']:.1f} s^-1 "
-                    f"(OP={ref['Gamma_OP']:.1f}, ER={ref['Gamma_ER']:.1f}, "
-                    f"SE={ref['Gamma_SE']:.1f} s^-1)."
+                    f"upper-manifold largest |D_m| at F={ref['F']:g}, m={ref['m']:g}; "
+                    f"D_m={ref['D_m']:.6g}, Gamma_m={ref['Gamma_m']:.6g} s^-1 "
+                    f"(OP={ref['Gamma_OP']:.6g}, ER={ref['Gamma_ER']:.6g}, "
+                    f"SE={ref['Gamma_SE']:.6g} s^-1)."
                 )
             else:
                 st.warning(
@@ -3238,7 +3410,9 @@ with st.expander("Weak-RF response model", expanded=False):
         r"""
         The population graph and Zeeman table are the zero-RF steady state. The
         RF plot is a first-order response around that state for a linearly
-        polarized field along the selected laboratory RF axis.
+        polarized field along the selected laboratory RF axis. Only the upper
+        ground hyperfine manifold $F_+=I+1/2$ contributes to the plotted
+        observable; the lower-manifold spin response is excluded.
 
         For each adjacent coherence $\rho_{m,m-1}$, the signed transition
         frequency and total local linewidth are
@@ -3251,6 +3425,8 @@ with st.expander("Weak-RF response model", expanded=False):
         r"""
         \omega_m=2\pi\nu_m,
         \qquad
+        \nu_m=\Delta\nu_m^{\rm LS}+\Delta\nu_m^B,
+        \qquad
         \Gamma_m=\Gamma_m^{\rm OP}+\Gamma_m^{\rm ER}+\Gamma_m^{\rm SE}.
         """
     )
@@ -3262,12 +3438,16 @@ with st.expander("Weak-RF response model", expanded=False):
         resonance. The code expands the density matrix as
         $\rho=\rho_0+\Omega_1\rho^{(1)}+O(\Omega_1^2)$ and solves directly
         for $\rho^{(1)}$. It therefore never assigns a finite numerical value
-        to $\Omega_1$. The plotted quantity is the zero-drive susceptibility
-        $|\partial\langle F_i\rangle/\partial\Omega_1|_{\Omega_1=0}$,
-        equivalently $|\langle F_i\rangle|/\Omega_1$ within linear response.
+        to $\Omega_1$. The plotted quantity is the upper-manifold zero-drive
+        susceptibility
+        $|\partial\langle F_{+,i}\rangle/\partial\Omega_1|_{\Omega_1=0}$,
+        equivalently $|\langle F_{+,i}\rangle|/\Omega_1$ within linear
+        response. The expectation value is taken with the upper-manifold block
+        of the full density matrix, so it retains the actual upper-manifold
+        population rather than being renormalized to unit population within $F_+$.
         When **Relaxation normalized** is selected, this susceptibility is
-        divided by $\Gamma_{m_*}$, where $m_*$ is the adjacent transition with
-        the largest $|D_m|$, with $D_m=P_m-P_{m-1}$ and
+        divided by $\Gamma_{m_*}$, where $m_*$ is the adjacent transition
+        within $F_+$ with the largest $|D_m|$, with $D_m=P_m-P_{m-1}$ and
         $\Gamma_{m_*}=\Gamma_{m_*}^{\rm OP}+\Gamma_{m_*}^{\rm ER}
         +\Gamma_{m_*}^{\rm SE}$.
         The adjacent transition matrix elements retain their full factors
@@ -3276,6 +3456,45 @@ with st.expander("Weak-RF response model", expanded=False):
         This is a well-resolved local-coherence approximation. It does not feed
         RF-induced populations or coherences back into the optical-pumping or
         spin-exchange steady-state solver.
+        """
+    )
+
+
+with st.expander("Static bias-field convention", expanded=False):
+    upper_F = bias_zeeman_info["upper_F"]
+    st.markdown(
+        rf"""
+        The entered bias-field value is the signed adjacent-level Larmor
+        frequency $\nu_{{B,+}}$ of the upper ground hyperfine manifold
+        $F_+={upper_F:g}$, with the field directed along the selected
+        quantization axis. The linear Zeeman shift used in the table is
+        """
+    )
+    st.latex(
+        r"""
+        \nu^B_{F,m}
+        =m\,\frac{g_F}{g_{F_+}}\,\nu_{B,+},
+        \qquad
+        \Delta\nu_m^B
+        =\nu^B_{F,m}-\nu^B_{F,m-1}
+        =\frac{g_F}{g_{F_+}}\,\nu_{B,+}.
+        """
+    )
+    ratio_text = ", ".join(
+        f"F={F:g}: g_F/g_(F+)={ratio:.8g}"
+        for F, ratio in sorted(bias_zeeman_info["ratio_by_F"].items())
+    )
+    st.write("Hyperfine Zeeman-slope ratios: " + ratio_text + ".")
+    st.markdown(
+        r"""
+        Because this field is parallel to the quantization axis, its Hamiltonian
+        is diagonal in the displayed $|F,m\rangle$ basis. It therefore does not
+        change the zero-RF population steady state, optical depopulation rates,
+        or the listed relaxation rates in this population-only secular model.
+        It does shift every adjacent-coherence resonance and therefore changes
+        the RF susceptibility spectrum through the updated $\nu_m$. The small
+        Zeeman corrections to optical transition detunings, and excited-state
+        Zeeman shifts, are not included in the optical-pumping calculation.
         """
     )
 
@@ -3433,8 +3652,9 @@ with st.expander("Light-shift calculation", expanded=False):
 
         The table quantity $\nu^{\mathrm{LS}}=\delta\omega/(2\pi)$ is the total
         light shift of a ground-state Zeeman sublevel in Hz after summing over all
-        excited states and active beams. The adjacent-sublevel light-shift
-        difference is $\nu_m=\nu^{\mathrm{LS}}_m-\nu^{\mathrm{LS}}_{m-1}$.
+        excited states and active beams. The table also shows the static-field
+        shift $\nu^B_{F,m}$. The total adjacent-sublevel resonance frequency is
+        $\nu_m=[\nu^{\mathrm{LS}}_m+\nu^B_m]-[\nu^{\mathrm{LS}}_{m-1}+\nu^B_{m-1}]$.
         Finally, $G^{\mathrm{OP}}$ is the total optical depopulation rate of the
         relevant ground-state sublevel, summed over excited states and active
         pump beams.
