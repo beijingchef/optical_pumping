@@ -1,4 +1,4 @@
-# alkali_pumping_v3.14.py
+# alkali_pumping_v3.16.py
 #
 # Streamlit app:
 #   Steady-state ground-state population distribution of alkali vapors
@@ -8,7 +8,7 @@
 #
 # Run:
 #   pip install streamlit numpy scipy sympy pandas matplotlib
-#   streamlit run alkali_pumping_v3.14.py
+#   streamlit run alkali_pumping_v3.16.py
 #
 # Model:
 #   dp/dt = [L_op,1 + L_op,2 + L_op,3 + R_ER (M_ER - I)] p
@@ -1332,6 +1332,85 @@ def build_spin_exchange_matrix(atom, ground_states, p_reference):
     return M, electron_marginal
 
 
+def spin_exchange_population_jacobian(atom, ground_states, p_reference, R_SE):
+    """Return the full linearized SE population Jacobian about p_reference.
+
+    The nonlinear population collision target is
+
+        T[p] = populations of Tr_S(rho[p]) tensor Tr_I(rho[p]),
+
+    after projection onto the displayed |F,m> populations.  Both the source
+    nuclear marginal and the ensemble electron marginal depend on p.  Hence
+    the derivative contains two retention/repopulation contributions:
+
+        delta T = (delta rho_I) tensor rho_S
+                + rho_I tensor (delta rho_S),
+
+    plus the normalization correction required when the population vector is
+    extended away from unit trace.  The returned matrix J_SE satisfies
+
+        delta(dot p)_SE = J_SE delta p
+
+    and includes the ensemble-electron feedback term.  Its columns sum to zero,
+    so it preserves the trace for arbitrary infinitesimal perturbations.
+    """
+    probs, _mI_list, _mS_list = hyperfine_uncoupled_probabilities(
+        atom, ground_states
+    )
+
+    p = np.asarray(p_reference, dtype=float)
+    p = np.clip(p, 0.0, None)
+    trace = float(p.sum())
+    if trace > 0:
+        p = p / trace
+    else:
+        p = np.ones(len(ground_states), dtype=float) / len(ground_states)
+
+    # Marginal probabilities of the reference diagonal density matrix.
+    nuclear_by_state = probs.sum(axis=2)  # [source state, m_I]
+    electron_by_state = probs.sum(axis=1)  # [source state, m_S]
+    nuclear_marginal = np.einsum("b,bi->i", p, nuclear_by_state)
+    electron_marginal = np.einsum("b,bs->s", p, electron_by_state)
+
+    # Reference postcollision target population T[p].
+    target_population = np.einsum(
+        "i,s,ais->a",
+        nuclear_marginal,
+        electron_marginal,
+        probs,
+    )
+
+    # dT/dp from changing the source nuclear marginal.
+    nuclear_feedback = np.einsum(
+        "ais,bi,s->ab",
+        probs,
+        nuclear_by_state,
+        electron_marginal,
+    )
+
+    # dT/dp from changing the ensemble electron marginal.
+    electron_feedback = np.einsum(
+        "ais,i,bs->ab",
+        probs,
+        nuclear_marginal,
+        electron_by_state,
+    )
+
+    # The implemented nonlinear map is homogeneous and trace preserving:
+    # T[p] = rho_I[p] tensor rho_S[p] / Tr(p).  At Tr(p)=1, differentiating
+    # 1/Tr(p) contributes -T[p] to every source-state column.
+    target_derivative = (
+        nuclear_feedback
+        + electron_feedback
+        - target_population[:, None]
+    )
+
+    J_SE = float(R_SE) * (
+        target_derivative - np.eye(len(ground_states), dtype=float)
+    )
+    return J_SE
+
+
 def spin_exchange_population_fractional_relaxation_rates(M_SE, p_steady, R_SE):
     """Return the signed SE fractional rate of each steady-state population.
 
@@ -1358,32 +1437,58 @@ def spin_exchange_population_fractional_relaxation_rates(M_SE, p_steady, R_SE):
 def spin_exchange_adjacent_coherence_self_relaxation_rates(
     atom,
     ground_states,
+    p_steady,
     electron_marginal,
     R_SE,
 ):
-    """Return SE self-decay rates for infinitesimal adjacent coherences.
+    """Return linearized SE self-decay rates for adjacent coherences.
 
-    The app's fixed-reference mean-field spin-exchange channel is extended from
-    populations to operators as
+    The population solver uses the nonlinear mean-field collision map
 
-        E_SE(rho) = Tr_S(rho) tensor rho_S,
+        E_SE(rho) = Tr_S(rho) tensor Tr_I(rho).
 
-    where rho_S is the electron-spin marginal of the final steady state. For
-    each adjacent coherence |a><b| in one F manifold, this function evaluates
+    Linearizing this map around the final diagonal steady state rho_0 gives
 
-        k_ab = <a| E_SE(|a><b|) |b>
+        delta E_SE = Tr_S(delta rho) tensor rho_S^(0)
+                   + rho_I^(0) tensor Tr_I(delta rho).
 
-    and reports R_SE (1-k_ab). The channel may also transfer amplitude among
-    coherences with the same Delta m, so this is the local/self-decay
-    coefficient of an infinitesimal perturbation, not an eigenmode decay rate.
+    The first term retains coherence through the source atom's nuclear marginal.
+    The second is the ensemble-electron feedback term: the collision partner's
+    electron marginal changes when the infinitesimal coherence carries electron
+    orientation. For each adjacent operator |a><b| within one F manifold, the
+    function projects both first-order terms back onto the same coherence and
+    reports
+
+        Gamma_ab^(SE) = R_SE [1 - k_ab^(nuclear) - k_ab^(electron)].
+
+    Spin exchange can also couple different coherences with the same Delta m.
+    Therefore this is the local/self coefficient appropriate to a well-resolved
+    transition, not a general Liouvillian eigenmode decay rate.
     """
     amplitudes = coupled_basis_amplitudes(atom, ground_states)
+
+    p = np.asarray(p_steady, dtype=float)
+    p = np.clip(p, 0.0, None)
+    if p.sum() > 0:
+        p = p / p.sum()
+    else:
+        p = np.ones(len(ground_states), dtype=float) / len(ground_states)
+
     electron_marginal = np.asarray(electron_marginal, dtype=float)
-    total = electron_marginal.sum()
-    if total > 0:
-        electron_marginal = electron_marginal / total
+    if electron_marginal.sum() > 0:
+        electron_marginal = electron_marginal / electron_marginal.sum()
     else:
         electron_marginal = np.array([0.5, 0.5], dtype=float)
+
+    # rho_0 is diagonal in |F,m>. Its nuclear and electron marginals are then
+    # diagonal in |m_I> and |m_S>, respectively.
+    probabilities = amplitudes**2
+    nuclear_marginal = np.einsum("a,ais->i", p, probabilities)
+    if nuclear_marginal.sum() > 0:
+        nuclear_marginal = nuclear_marginal / nuclear_marginal.sum()
+
+    rho_I_0 = np.diag(nuclear_marginal)
+    rho_S_0 = np.diag(electron_marginal)
 
     rates = np.full(len(ground_states), np.nan, dtype=float)
     state_index = {
@@ -1400,18 +1505,38 @@ def spin_exchange_adjacent_coherence_self_relaxation_rates(
         C_a = amplitudes[a_idx]
         C_b = amplitudes[b_idx]
 
-        # Nuclear operator after tracing the source electron spin.
-        rho_I = np.einsum("is,js->ij", C_a, C_b)
+        # Marginals of the infinitesimal operator delta rho = |a><b|.
+        delta_rho_I = np.einsum("is,js->ij", C_a, C_b)
+        delta_rho_S = np.einsum("is,it->st", C_a, C_b)
 
-        # Project rho_I tensor rho_S back onto the same adjacent coherence.
-        self_retention = np.einsum(
-            "is,ij,s,js->",
+        # 1) Nuclear-memory retention:
+        #    Tr_S(delta rho) tensor rho_S^(0).
+        nuclear_retention = np.einsum(
+            "is,ij,st,jt->",
             C_a,
-            rho_I,
-            electron_marginal,
+            delta_rho_I,
+            rho_S_0,
             C_b,
         )
-        rates[a_idx] = float(R_SE) * (1.0 - float(self_retention))
+
+        # 2) Ensemble-electron feedback:
+        #    rho_I^(0) tensor Tr_I(delta rho).
+        electron_feedback = np.einsum(
+            "is,ij,st,jt->",
+            C_a,
+            rho_I_0,
+            delta_rho_S,
+            C_b,
+        )
+
+        total_retention = float(nuclear_retention + electron_feedback)
+        # Clip only tiny floating-point excursions outside the physical range.
+        if -1e-12 < total_retention < 0.0:
+            total_retention = 0.0
+        if 1.0 < total_retention < 1.0 + 1e-12:
+            total_retention = 1.0
+
+        rates[a_idx] = float(R_SE) * (1.0 - total_retention)
 
     return rates
 
@@ -2452,10 +2577,22 @@ Gamma_SE = (
     spin_exchange_adjacent_coherence_self_relaxation_rates(
         atom,
         ground_states,
+        p_ss,
         se_solver_info["electron_marginal"],
         R_SE,
     )
 )
+
+# Full small-signal population Jacobian.  Unlike the frozen map used inside
+# the fixed-point iteration, this includes the response of the ensemble electron
+# marginal to a population perturbation.
+J_SE_population = spin_exchange_population_jacobian(
+    atom,
+    ground_states,
+    p_ss,
+    R_SE,
+)
+J_total_population = L_linear + J_SE_population
 
 df_pop = pd.DataFrame({
     "F": [g["F"] for g in ground_states],
@@ -2648,14 +2785,14 @@ with right:
             st.markdown(
                 r"""
                 $\small D_m=P_m-P_{m-1}$ is the population difference between adjacent Zeeman sublevels.  
-                $\small \nu_m=\nu^{\mathrm{LS}}_{m}-\nu^{\mathrm{LS}}_{m-1}$ is the adjacent-sublevel light-shift difference.  
+                $\small \nu_m=\nu^{\mathrm{LS}}_{m}-\nu^{\mathrm{LS}}_{m-1}$ is the adjacent-sublevel resonance frequency.  
                 $\small G^{\mathrm{ER}}_{m}$ is the signed net fractional ER rate of population of sublevel m; positive means loss.  
-                $\small G^{\mathrm{SE}}_{m}$ is the signed net fractional SE rate of population of sublevel m at the steady state. 
-                $\small \Lambda_{m}$ is the totalrepopulation rate into $\small \lvert F,m\rangle$ divided by its steady-state population.  
+                $\small G^{\mathrm{SE}}_{m}=-(\dot P_m)_{\mathrm{SE}}/P_m$ is the exact signed net fractional SE population flow evaluated with the full nonlinear map; positive means loss. It is not a small-signal eigenmode decay rate.  
+                $\small \Lambda_{m}$ is the total repopulation rate into $\small \lvert F,m\rangle$ divided by its steady-state population.  
                 $\small G^{\mathrm{OP}}_{m}$ is the depopulation rate from $\small\lvert F,m\rangle$, summed over excited states and active pumps.  
-                $\small \Gamma^{\mathrm{OP}}_{m}=(G^{\mathrm{OP}}_m+G^{\mathrm{OP}}_{m-1})/2$ is the pump-induced adjacent-coherence decay rate, and $\small \Gamma^{\mathrm{OP}}_{m}/2\pi$ is the corresponding broadening.  
-                $\small \Gamma^{\mathrm{ER}}_{m}$ is the ER-induced self-decay rate of the local adjacent-coherence $\small\rho_{m,m-1}$.  
-                $\small \Gamma^{\mathrm{SE}}_{m}$ is the ER-induced self-decay rate of the local adjacent-coherence $\small \rho_{m,m-1}$ at the steady-state.
+                $\small \Gamma^{\mathrm{OP}}_{m}=(G^{\mathrm{OP}}_m+G^{\mathrm{OP}}_{m-1})/2$ is the pump-induced decay rate of adjacent coherence $\small\rho_{m,m-1}$  
+                $\small \Gamma^{\mathrm{ER}}_{m}$ is the ER-induced self-decay rate of the local adjacent coherence $\small\rho_{m,m-1}$.  
+                $\small \Gamma^{\mathrm{SE}}_{m}$ is the linearized SE-induced self-decay rate of the well-resolved local adjacent coherence $\small \rho_{m,m-1}$, including ensemble-electron feedback.
                 """
             )
     st.markdown(
@@ -2685,10 +2822,27 @@ with st.expander("D1/D2 hyperfine transition detunings", expanded=False):
     )
 
 if show_rate_matrices:
-    with st.expander("Total rate matrix L", expanded=False):
-        st.write("Columns are source states; rows are destination states. dp/dt = L p.")
-        Ldf = pd.DataFrame(L_total, index=labels, columns=labels)
-        st.dataframe(Ldf.style.format("{:.3e}"), width="stretch")
+    with st.expander("Linearized population Jacobian J", expanded=False):
+        st.write(
+            "Columns are source-state perturbations and rows are destination "
+            "population derivatives. Near the calculated steady state, "
+            "d(δp)/dt = J δp. The SE part is the derivative of the full "
+            "nonlinear map and includes ensemble-electron feedback."
+        )
+        Jdf = pd.DataFrame(J_total_population, index=labels, columns=labels)
+        st.dataframe(Jdf.style.format("{:.3e}"), width="stretch")
+
+    with st.expander("Frozen SE collision map M_SE", expanded=False):
+        st.write(
+            "For the final steady-state electron marginal, one collision maps "
+            "p → M_SE p. This frozen map is used in the fixed-point solver, but "
+            "R_SE(M_SE−I) is not the full population Jacobian because M_SE itself "
+            "changes when the ensemble electron marginal changes."
+        )
+        MSEdf = pd.DataFrame(
+            se_solver_info["M_SE"], index=labels, columns=labels
+        )
+        st.dataframe(MSEdf.style.format("{:.4f}"), width="stretch")
 
     with st.expander("ER redistribution matrix M_ER", expanded=False):
         st.write("After one ER collision: p → M_ER p.")
@@ -2721,11 +2875,29 @@ with st.expander("Spin-exchange diagnostics", expanded=False):
         "m→−m symmetry enforced in SE solve: "
         f"{se_solver_info.get('mirror_symmetry_enforced', False)}."
     )
+    se_map_column_error = float(
+        np.max(np.abs(np.sum(se_solver_info["M_SE"], axis=0) - 1.0))
+    )
+    se_jacobian_trace_error = float(
+        np.max(np.abs(np.sum(J_SE_population, axis=0)))
+    )
+    m_vector = np.array([state["m"] for state in ground_states], dtype=float)
+    se_jacobian_m_error = float(
+        np.max(np.abs(m_vector @ J_SE_population))
+    )
+    st.write(
+        "SE numerical conservation checks: "
+        f"max |Σ_a M_SE(a,b)−1| = {se_map_column_error:.3e}; "
+        f"max |Σ_a J_SE(a,b)| = {se_jacobian_trace_error:.3e}; "
+        f"max |mᵀJ_SE| = {se_jacobian_m_error:.3e}."
+    )
     st.caption(
         "Spin exchange is included as a population-only mean-field collision map. "
         "It preserves the source atom's nuclear-spin marginal and replaces the "
         "electron spin by the ensemble electron-spin marginal, then projects back "
-        "onto the displayed hyperfine populations. Coherences are not propagated."
+        "onto the displayed hyperfine populations. Coherences are not propagated; "
+        "the displayed coherence rates are obtained by linearizing the full nonlinear "
+        "mean-field map, including ensemble-electron feedback."
     )
 
 with st.expander("Light-shift calculation", expanded=False):
@@ -2877,7 +3049,7 @@ with st.expander("Model and sign convention"):
         """
     )
 
-    st.write("In this population-only app, M_SE[p] is a mean-field collision map. It does not propagate spin-exchange coherences or pair correlations.")
+    st.write("In this population-only app, M_SE[p] is a nonlinear mean-field collision map. The steady-state population solver recomputes the ensemble electron marginal self-consistently, so population feedback is included. The app does not propagate coherences or pair correlations; displayed coherence rates and the optional population Jacobian are obtained by linearizing the full nonlinear map.")
 
     st.write("In the interface, each laser detuning is set relative to a selected pressure-shifted hyperfine transition. The entered pump rate R_pump is defined as the total absorption rate for atoms that are unpolarized within the ground hyperfine level F of that selected transition:")
 
