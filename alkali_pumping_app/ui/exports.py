@@ -20,12 +20,15 @@ def weak_rf_export_dataframe(
     *,
     relaxation_normalized,
     normalization_gamma_s_inv=None,
+    density_factored=False,
+    density_cm3=None,
 ):
     """Return raw and plotted weak-RF susceptibility samples for export.
 
     Raw susceptibility values retain the calculation's phase convention. The
     plotted signed components include the common -1 display factor, and the
-    plotted values include relaxation normalization when it is active.
+    plotted values include relaxation normalization and the alkali-density
+    factor when those display options are active.
     """
     arrays = {
         "frequency_Hz": np.asarray(frequencies_hz, dtype=float),
@@ -46,12 +49,18 @@ def weak_rf_export_dataframe(
     if len(sample_counts) != 1:
         raise ValueError("All weak-RF export arrays must have the same length.")
 
-    plotted_units = (
-        "hbar/atom" if relaxation_normalized else "hbar s/atom"
-    )
+    if density_factored:
+        plotted_units = "hbar/cm^3" if relaxation_normalized else "hbar s/cm^3"
+    else:
+        plotted_units = "hbar/atom" if relaxation_normalized else "hbar s/atom"
     normalization_gamma = (
         float(normalization_gamma_s_inv)
         if relaxation_normalized and normalization_gamma_s_inv is not None
+        else np.nan
+    )
+    density_value = (
+        float(density_cm3)
+        if density_factored and density_cm3 is not None
         else np.nan
     )
 
@@ -60,4 +69,6 @@ def weak_rf_export_dataframe(
     dataframe["signed_component_plot_factor"] = -1.0
     dataframe["relaxation_normalized"] = bool(relaxation_normalized)
     dataframe["normalization_gamma_s_inv"] = normalization_gamma
+    dataframe["density_factored"] = bool(density_factored)
+    dataframe["density_cm3"] = density_value
     return dataframe

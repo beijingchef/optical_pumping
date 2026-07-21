@@ -279,5 +279,73 @@ def total_nu_LS_from_diagnostics(ground_states, beam_inputs, diagnostics):
     return nu_LS, True
 
 
+def decompose_nu_LS_components(ground_states, nu_LS):
+    """Decompose each hyperfine manifold into scalar, vector, and tensor shifts.
+
+    Within a manifold the fitted basis is
+
+        nu(F,m) = nu_scalar + c_vector*m
+                  + c_tensor*[3*m**2 - F*(F+1)].
+
+    The returned vector and tensor arrays contain the complete state-dependent
+    contributions, rather than only their fitted coefficients. Unavailable
+    total shifts remain unavailable in every component.
+    """
+    total = np.asarray(nu_LS, dtype=float)
+    state_count = len(ground_states)
+    if total.shape != (state_count,):
+        raise ValueError("nu_LS must contain one value per ground state.")
+
+    scalar = np.full(state_count, np.nan, dtype=float)
+    vector = np.full(state_count, np.nan, dtype=float)
+    tensor = np.full(state_count, np.nan, dtype=float)
+    residual = np.full(state_count, np.nan, dtype=float)
+
+    manifold_values = sorted({float(state["F"]) for state in ground_states})
+    for F in manifold_values:
+        indices = np.array(
+            [
+                index
+                for index, state in enumerate(ground_states)
+                if np.isclose(float(state["F"]), F)
+            ],
+            dtype=int,
+        )
+        manifold_shift = total[indices]
+        if not np.all(np.isfinite(manifold_shift)):
+            continue
+
+        m = np.array([float(ground_states[index]["m"]) for index in indices])
+        scalar_basis = np.ones_like(m)
+        vector_basis = m
+        tensor_basis = 3.0 * m**2 - F * (F + 1.0)
+
+        basis_columns = [scalar_basis]
+        component_names = ["scalar"]
+        if np.linalg.norm(vector_basis) > 1e-14:
+            basis_columns.append(vector_basis)
+            component_names.append("vector")
+        if np.linalg.norm(tensor_basis) > 1e-14:
+            basis_columns.append(tensor_basis)
+            component_names.append("tensor")
+
+        design = np.column_stack(basis_columns)
+        coefficients, *_ = np.linalg.lstsq(design, manifold_shift, rcond=None)
+        fitted = design @ coefficients
+        coefficient_by_name = dict(zip(component_names, coefficients))
+
+        scalar[indices] = coefficient_by_name["scalar"] * scalar_basis
+        vector[indices] = coefficient_by_name.get("vector", 0.0) * vector_basis
+        tensor[indices] = coefficient_by_name.get("tensor", 0.0) * tensor_basis
+        residual[indices] = manifold_shift - fitted
+
+    return {
+        "scalar": scalar,
+        "vector": vector,
+        "tensor": tensor,
+        "residual": residual,
+    }
+
+
 # ============================================================
 # 7. Electron-randomization matrix

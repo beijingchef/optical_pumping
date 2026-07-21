@@ -16,6 +16,7 @@ RF_CONDITION_KEYS = (
     "rf_show_in_phase",
     "rf_show_quadrature",
     "rf_relaxation_normalized",
+    "rf_density_factor",
 )
 CONDITION_KEYS = (
     "condition_name",
@@ -45,21 +46,21 @@ DEFAULT_STARTUP_CONDITION = {
     "line1": "D1",
     "transition1": "1→2",
     "det_rel1": 0.0,
-    "rate_reference1": "At detuning",
+    "rate_reference1": "At resonance",
     "rate1": 1200.0,
     "k1": "x",
     "pol1": "linear z",
     "line2": "D1",
     "transition2": "2→2",
     "det_rel2": 400.0,
-    "rate_reference2": "At detuning",
+    "rate_reference2": "At resonance",
     "rate2": 400.0,
     "k2": "x",
     "pol2": "linear z",
     "line3": "D1",
     "transition3": "2→2",
     "det_rel3": 0.0,
-    "rate_reference3": "At detuning",
+    "rate_reference3": "At resonance",
     "rate3": 0.0,
     "k3": "x",
     "pol3": "linear z",
@@ -71,6 +72,7 @@ DEFAULT_STARTUP_CONDITION = {
     "rf_show_in_phase": False,
     "rf_show_quadrature": False,
     "rf_relaxation_normalized": False,
+    "rf_density_factor": False,
     "show_allowed_only": True,
     "show_rate_matrices": False,
 }
@@ -141,22 +143,32 @@ def apply_loaded_condition_dict(payload):
     if not isinstance(conditions, dict):
         raise ValueError("The JSON file does not contain a conditions object.")
 
-    missing = [key for key in CONDITION_KEYS if key not in conditions]
+    # rf_density_factor was added without changing the v5.0 file schema.
+    # Older v5.0 files therefore load with this new display option disabled.
+    optional_defaults = {"rf_density_factor": False}
+    missing = [
+        key for key in CONDITION_KEYS
+        if key not in conditions and key not in optional_defaults
+    ]
     if missing:
         raise ValueError(
             "The condition file is missing required fields: " + ", ".join(missing)
         )
 
-    loaded_name = clean_condition_name(conditions["condition_name"])
+    loaded_conditions = dict(conditions)
+    for key, value in optional_defaults.items():
+        loaded_conditions.setdefault(key, value)
+
+    loaded_name = clean_condition_name(loaded_conditions["condition_name"])
     for key in CONDITION_KEYS:
-        value = conditions[key]
+        value = loaded_conditions[key]
         if value is not None:
             st.session_state[key] = value
 
     normalize_rf_frequency_bounds(prefer="lower")
 
     # Prevent atom-change default logic from overwriting loaded N2 coefficients.
-    st.session_state["_last_atom_name_for_defaults"] = conditions["atom_name"]
+    st.session_state["_last_atom_name_for_defaults"] = loaded_conditions["atom_name"]
     return loaded_name
 
 

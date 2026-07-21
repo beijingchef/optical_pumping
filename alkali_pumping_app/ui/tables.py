@@ -134,6 +134,8 @@ def render_zeeman_properties_table_html(df):
         ("P_F", "P<sub>F</sub>", None, ".3f"),
         ("Pₘ", "P<sub>m</sub>", None, ".3f"),
         ("Dₘ", "D<sub>m</sub>", None, ".3f"),
+        ("ν^{VS} (Hz)", "ν<sup>VS</sup>", "Hz", ".1f"),
+        ("ν^{TS} (Hz)", "ν<sup>TS</sup>", "Hz", ".1f"),
         ("ν^{LS} (Hz)", "ν<sup>LS</sup>", "Hz", ".1f"),
         ("ν^{B} (Hz)", "ν<sup>B</sup>", "Hz", ".1f"),
         ("ν_m (Hz)", "ν<sub>m</sub>", "Hz", ".1f"),
@@ -232,4 +234,3 @@ def render_zeeman_properties_table_html(df):
 </table>
 </div>
 """
-

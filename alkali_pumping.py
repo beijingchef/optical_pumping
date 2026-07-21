@@ -1,4 +1,4 @@
-"""Streamlit entry point for Alkali Pumping v5.1.
+"""Streamlit entry point for Alkali Pumping v5.2.
 
 The page body intentionally remains a direct script so Streamlit reruns it
 from top to bottom on every interaction. Physics and reusable UI helpers live
@@ -15,11 +15,13 @@ import streamlit as st
 from alkali_pumping_app.physics import *
 from alkali_pumping_app.physics.optical_pumping import build_optical_L
 from alkali_pumping_app.ui.captions import input_conditions_caption
+from alkali_pumping_app.ui.atomic_settings import atomic_properties_dialog
 from alkali_pumping_app.ui.conditions import *
 from alkali_pumping_app.ui.exports import (
     dataframe_to_csv_bytes,
     weak_rf_export_dataframe,
 )
+from alkali_pumping_app.ui.rf_display import prepare_weak_rf_plot_values
 from alkali_pumping_app.ui.tables import *
 from alkali_pumping_app.version import DISPLAY_VERSION, __version__
 
@@ -41,9 +43,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.title(
-    f"Alkali pumping v{DISPLAY_VERSION}: three pumps + ER + SE + weak RF"
-)
+title_column, settings_column = st.columns([0.84, 0.16], vertical_alignment="center")
+with title_column:
+    st.title(
+        f"Alkali pumping v{DISPLAY_VERSION}: three pumps + ER + SE + weak RF"
+    )
+with settings_column:
+    if st.button("⚙️ Settings", width="stretch"):
+        atomic_properties_dialog()
 
 # ============================================================
 # Sidebar: all input condition values
@@ -66,89 +73,6 @@ with st.sidebar:
     if "include_spin_exchange" not in st.session_state:
         st.session_state["include_spin_exchange"] = True
 
-    st.markdown(
-        """
-        <style>
-        section[data-testid="stSidebar"] div[data-testid="stFileUploader"] section {
-            padding: 0.15rem 0.25rem;
-            min-height: 2.2rem;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stFileUploader"] small {
-            display: none;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] {
-            padding: 0.20rem 0.25rem;
-            min-height: 2.2rem;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stFileUploader"] button,
-        section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button {
-            height: 2.25rem;
-            padding-top: 0.15rem;
-            padding-bottom: 0.15rem;
-        }
-        
-                /* Keep the v4.14 compact field height and remove vertical padding. */
-        div[data-baseweb="input"] > div {
-            min-height: 20px;
-            height: 20px;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-        }
-
-        div[data-baseweb="input"] input {
-            font-size: 16px !important;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-        }
-
-        /* Selectboxes keep the same height with zero vertical padding. */
-        div[data-baseweb="select"] > div {
-            min-height: 20px;
-            height: 20px;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-        }
-
-        div[data-baseweb="select"] [role="combobox"] {
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-        }
-
-        div[data-baseweb="select"] {
-            font-size: 16px !important;
-        }
-
-        div[data-baseweb="select"] [role="combobox"],
-        div[data-baseweb="select"] [role="combobox"] * {
-            font-size: 16px !important;
-        }
-
-        div[role="listbox"] [role="option"],
-        div[role="listbox"] [role="option"] * {
-            font-size: 16px !important;
-        }
-
-        .stNumberInput label,
-        .stSelectbox label,
-        .stTextInput label,
-        .stCheckbox label,
-        .stFileUploader label {
-            font-size: 14px !important;
-        }
-
-        .stNumberInput label p,
-        .stSelectbox label p,
-        .stTextInput label p,
-        .stCheckbox label p,
-        .stFileUploader label p {
-            font-size: 14px !important;
-        }
-        
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
     st.header("condition")
     if "condition_name" not in st.session_state:
         st.session_state["condition_name"] = "default-ps400"
@@ -159,10 +83,9 @@ with st.sidebar:
     condition_controls_placeholder = st.empty()
 
     st.header("Atom / cell")
-    atom_row_col1, atom_row_col2, atom_row_col3 = st.columns(3, gap="small")
-    with atom_row_col1:
-        atom_name = st.selectbox("Alkali atom", list(ATOMS.keys()), index=0, key="atom_name")
-    with atom_row_col2:
+    atom_name = st.selectbox("Alkali atom", list(ATOMS.keys()), index=0, key="atom_name")
+    cell_condition_col1, cell_condition_col2 = st.columns(2, gap="small")
+    with cell_condition_col1:
         n2_pressure_torr = st.number_input(
             "N₂ pressure (Torr)",
             min_value=0.0,
@@ -170,7 +93,7 @@ with st.sidebar:
             format="%.1f",
             key="n2_pressure_torr",
         )
-    with atom_row_col3:
+    with cell_condition_col2:
         temperature_C = st.number_input(
             "Temperature (°C)",
             step=1.0,
@@ -189,12 +112,15 @@ with st.sidebar:
         st.session_state["D2_shift"] = DEFAULT_N2_COEFFS[atom_name]["D2"]["shift"]
         st.session_state["_last_atom_name_for_defaults"] = atom_name
 
+    se_rate_preview = spin_exchange_rate_info(atom_name, atom, temperature_C)
+
     cell_row_col1, cell_row_col2 = st.columns(2, gap="small")
     with cell_row_col1:
         include_spin_exchange = st.checkbox(
             "Include spin exchange",
             key="include_spin_exchange",
         )
+        st.caption(f"R_SE={se_rate_preview['rate_s']:.3g} s⁻¹")
     with cell_row_col2:
         # Keep the legacy session-state key for compatibility with existing
         # condition files, while using R_ER as the physical rate symbol.
@@ -206,44 +132,12 @@ with st.sidebar:
             key="gamma_ER",
         )
 
-    se_rate_preview = spin_exchange_rate_info(atom_name, atom, temperature_C)
-    st.caption(
-        f"R_SE={se_rate_preview['rate_s']:.3g}s⁻¹ "
-        f"for n={se_rate_preview['density_cm3']:.2g}cm⁻³ and "
-        f"σ_SE={se_rate_preview['sigma_cm2']:.2g}cm²."
-    )
-
-    with st.expander("N₂ coefficients", expanded=False):
-        c1, c2 = st.columns(2, gap="small")
-        with c1:
-            D1_width = st.number_input(
-                "D1 broadening",
-                step=0.1,
-                key="D1_width",
-                help="N2 pressure-broadening coefficient, MHz/Torr",
-            )
-            D2_width = st.number_input(
-                "D2 broadening",
-                step=0.1,
-                key="D2_width",
-                help="N2 pressure-broadening coefficient, MHz/Torr",
-            )
-
-        with c2:
-            D1_shift = st.number_input(
-                "D1 shift",
-                step=0.1,
-                key="D1_shift",
-                help="N2 pressure shift coefficient, MHz/Torr",
-            )
-            D2_shift = st.number_input(
-                "D2 shift",
-                step=0.1,
-                key="D2_shift",
-                help="N2 pressure shift coefficient, MHz/Torr",
-            )
-
-        st.caption("Broadening and shifts are in MHz/Torr. Negative shift = red shift.")
+    # The coefficients remain part of condition state and the physics model,
+    # but are no longer editable in the sidebar.
+    D1_width = float(st.session_state["D1_width"])
+    D2_width = float(st.session_state["D2_width"])
+    D1_shift = float(st.session_state["D1_shift"])
+    D2_shift = float(st.session_state["D2_shift"])
 
     axis_col, bias_col = st.columns(2, gap="small")
     with axis_col:
@@ -322,7 +216,7 @@ with st.sidebar:
         )
         rate_reference = st.selectbox(
             "Pump-rate reference",
-            ["At detuning", "At resonance"],
+            ["At resonance", "At detuning"],
             key=rate_reference_key,
             help=(
                 "Choose whether the entered total rate describes the selected "
@@ -330,7 +224,7 @@ with st.sidebar:
             ),
         )
         rate = st.number_input(
-            "Total pump rate (s⁻¹)",
+            "Pump rate (s⁻¹)",
             min_value=0.0,
             step=10.0,
             format="%.0f",
@@ -443,6 +337,7 @@ rf_show_quadrature = bool(st.session_state.get("rf_show_quadrature", False))
 rf_relaxation_normalized = bool(
     st.session_state.get("rf_relaxation_normalized", False)
 )
+rf_density_factor = bool(st.session_state.get("rf_density_factor", False))
 
 # ============================================================
 # Build model
@@ -587,6 +482,9 @@ nu_LS, light_shift_available = total_nu_LS_from_diagnostics(
     beam_inputs,
     diagnostics,
 )
+light_shift_components = decompose_nu_LS_components(ground_states, nu_LS)
+nu_VS = light_shift_components["vector"]
+nu_TS = light_shift_components["tensor"]
 nu_B, bias_zeeman_info = ground_zeeman_shifts_hz(
     atom_name,
     atom,
@@ -638,6 +536,8 @@ df_pop = pd.DataFrame({
     "F": [g["F"] for g in ground_states],
     "m": [g["m"] for g in ground_states],
     "population": p_ss,
+    "nu_VS": nu_VS,
+    "nu_TS": nu_TS,
     "nu_LS": nu_LS,
     "nu_B": nu_B,
     "Lambda": Lambda_by_state,
@@ -692,23 +592,36 @@ else:
     }
 
 rf_relaxation_reference = largest_abs_Dm_relaxation_reference(df_pop, target_F=rf_upper_F)
-rf_plot_amplitude = np.asarray(rf_susceptibility_amplitude, dtype=float).copy()
-
-# Display convention: flip both signed lock-in components by a common minus sign.
-# This is a 180-degree phase/polarity change used only to make the three-curve
-# plot more compact.  The amplitude, resonance positions, and linewidths are
-# unchanged.
-rf_plot_in_phase = -np.asarray(rf_susceptibility_in_phase, dtype=float).copy()
-rf_plot_quadrature = -np.asarray(rf_susceptibility_quadrature, dtype=float).copy()
 rf_relaxation_normalization_applied = False
+normalization_gamma = None
 if rf_relaxation_normalized and rf_relaxation_reference.get("available", False):
     # Relaxation normalization removes the 1/Gamma response scale by
     # multiplying the susceptibility by the selected local coherence rate.
     normalization_gamma = rf_relaxation_reference["Gamma_m"]
-    rf_plot_amplitude *= normalization_gamma
-    rf_plot_in_phase *= normalization_gamma
-    rf_plot_quadrature *= normalization_gamma
     rf_relaxation_normalization_applied = True
+
+# The density option converts the per-atom susceptibility into a response per
+# unit volume using the same saturated-vapor density used for spin exchange.
+rf_density_factor_applied = bool(rf_density_factor)
+rf_density_cm3 = (
+    float(se_rate_info["density_cm3"])
+    if rf_density_factor_applied
+    else None
+)
+
+# Display convention: flip both signed lock-in components by a common minus
+# sign. Optional relaxation and density factors multiply all three curves.
+(
+    rf_plot_amplitude,
+    rf_plot_in_phase,
+    rf_plot_quadrature,
+) = prepare_weak_rf_plot_values(
+    rf_susceptibility_amplitude,
+    rf_susceptibility_in_phase,
+    rf_susceptibility_quadrature,
+    relaxation_gamma_s_inv=normalization_gamma,
+    density_cm3=rf_density_cm3,
+)
 
 df_F = population_by_F(df_pop)
 
@@ -737,6 +650,8 @@ df_pop_display = df_pop.rename(columns={
     "hyperfine_population": "P_F",
     "population": "Pₘ",
     "population_difference": "Dₘ",
+    "nu_VS": "ν^{VS} (Hz)",
+    "nu_TS": "ν^{TS} (Hz)",
     "nu_LS": "ν^{LS} (Hz)",
     "nu_B": "ν^{B} (Hz)",
     "nu_m": "ν_m (Hz)",
@@ -756,6 +671,8 @@ df_pop_display = df_pop_display[[
     "P_F",
     "Pₘ",
     "Dₘ",
+    "ν^{VS} (Hz)",
+    "ν^{TS} (Hz)",
     "ν^{LS} (Hz)",
     "ν^{B} (Hz)",
     "ν_m (Hz)",
@@ -792,6 +709,8 @@ df_rf_export = weak_rf_export_dataframe(
     plotted_quadrature=rf_plot_quadrature,
     relaxation_normalized=rf_relaxation_normalization_applied,
     normalization_gamma_s_inv=rf_normalization_gamma,
+    density_factored=rf_density_factor_applied,
+    density_cm3=rf_density_cm3,
 )
 rf_csv = dataframe_to_csv_bytes(df_rf_export)
 
@@ -917,6 +836,7 @@ with right:
             st.markdown(
                 r"""
                 $\small D_m=P_m-P_{m-1}$ is the population difference between adjacent Zeeman sublevels.  
+                $\small \nu^{\mathrm{VS}}$ and $\small \nu^{\mathrm{TS}}$ are the vector and tensor contributions to the total light shift $\small \nu^{\mathrm{LS}}$; its scalar contribution is not shown separately.  
                 $\small \nu_m=[\nu^{\mathrm{LS}}_{m}+\nu^{B}_{m}]-[\nu^{\mathrm{LS}}_{m-1}+\nu^{B}_{m-1}]$ is the total adjacent-sublevel resonance frequency.  
                 $\small \nu^{B}_{F,m}=m(g_F/g_{F_+})\nu_{B,+}$ is the static-field Zeeman shift, where the entered $\nu_{B,+}$ is the signed upper-manifold Larmor frequency.  
                 $\small G^{\mathrm{ER}}_{m}$ is the signed net fractional ER rate of population of sublevel m; positive means loss.  
@@ -933,9 +853,9 @@ with right:
         unsafe_allow_html=True,
     )
     if light_shift_available:
-        st.caption(r"$\nu^{\mathrm{LS}}$ is shown because all active pump-beam light-shift Hamiltonians commute with the selected quantization-axis spin component.")
+        st.caption(r"$\nu^{\mathrm{VS}}$, $\nu^{\mathrm{TS}}$, and $\nu^{\mathrm{LS}}$ are shown because all active pump-beam light-shift Hamiltonians commute with the selected quantization-axis spin component.")
     else:
-        st.caption(r"$\nu^{\mathrm{LS}}$ is blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
+        st.caption(r"$\nu^{\mathrm{VS}}$, $\nu^{\mathrm{TS}}$, and $\nu^{\mathrm{LS}}$ are blank because at least one active beam has multiple spherical polarization components relative to the quantization axis, so the light-shift Hamiltonian may not commute with the selected spin component.")
 rf_title_left, rf_title, rf_download = st.columns(
     [0.16, 0.68, 0.16], gap="small"
 )
@@ -1024,6 +944,14 @@ with rf_control_col:
             f"relaxation rate Gamma_m for the F={rf_upper_F:g} transition with the largest |D_m|."
         ),
     )
+    rf_density_factor = st.checkbox(
+        "Density factor",
+        key="rf_density_factor",
+        help=(
+            "Multiply every plotted RF susceptibility component by the "
+            "calculated alkali vapor number density n(T) in cm⁻³."
+        ),
+    )
 
 with rf_plot_col:
     if not light_shift_available:
@@ -1099,10 +1027,20 @@ with rf_plot_col:
                 )
         rf_ax.axhline(0.0, linewidth=0.8, alpha=0.45)
         rf_ax.set_xlabel("RF frequency (Hz)")
-        if rf_relaxation_normalization_applied:
+        if rf_relaxation_normalization_applied and rf_density_factor_applied:
+            rf_ax.set_ylabel(
+                rf"$n(T)\Gamma_{{m_*}}\langle F_{{+,{rf_observable[-1].lower()}}}\rangle/\Omega_1$ "
+                rf"($\hbar/\mathrm{{cm}}^3$)"
+            )
+        elif rf_relaxation_normalization_applied:
             rf_ax.set_ylabel(
                 rf"$\Gamma_{{m_*}}\langle F_{{+,{rf_observable[-1].lower()}}}\rangle/\Omega_1$ "
                 rf"($\hbar$/atom)"
+            )
+        elif rf_density_factor_applied:
+            rf_ax.set_ylabel(
+                rf"$n(T)\langle F_{{+,{rf_observable[-1].lower()}}}\rangle/\Omega_1$ "
+                rf"($\hbar\,\mathrm{{s}}/\mathrm{{cm}}^3$)"
             )
         else:
             rf_ax.set_ylabel(
@@ -1120,10 +1058,10 @@ with rf_plot_col:
         )
         st.pyplot(rf_fig, width="stretch")
 
-        normalization_caption_col, response_tip_col = st.columns(
+        input_caption_col, response_tip_col = st.columns(
             [0.92, 0.08], gap="small"
         )
-        with normalization_caption_col:
+        with input_caption_col:
             st.caption(
                 input_conditions_caption(
                     atom_name=atom_name,
@@ -1247,6 +1185,11 @@ with st.expander("Weak-RF response model", expanded=False):
         within $F_+$ with the largest $|D_m|$, with $D_m=P_m-P_{m-1}$ and
         $\Gamma_{m_*}=\Gamma_{m_*}^{\rm OP}+\Gamma_{m_*}^{\rm ER}
         +\Gamma_{m_*}^{\rm SE}$.
+        When **Density factor** is selected, every displayed component is also
+        multiplied by the saturated alkali vapor number density $n(T)$ in
+        cm$^{-3}$. This converts the plotted response from a per-atom quantity
+        to a response per unit volume; it does not alter the steady-state or RF
+        susceptibility calculation itself.
         The adjacent transition matrix elements retain their full factors
         $C_m=\sqrt{F(F+1)-m(m-1)}$.
 
