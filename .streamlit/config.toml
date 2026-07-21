@@ -1,1 +1,26 @@
+# Native Streamlit theme configuration template.
+#
+# All settings are commented out so this file does not change the current
+# appearance. Uncomment and edit the options you want to use in the future.
+# Some font changes require restarting the Streamlit server.
 
+[theme]
+base = "light"                 # "light" or "dark"
+# primaryColor = "#FF4B4B"
+# backgroundColor = "#FFFFFF"
+# secondaryBackgroundColor = "#F0F2F6"
+# textColor = "#31333F"
+font = "Arial"            # "sans-serif", "serif", or "monospace", or "'Times New Roman', serif"
+baseFontSize = 18               # pixels; applies to the whole app
+# baseFontWeight = 400
+# baseRadius = "0.5rem"
+# showWidgetBorder = true
+
+# [theme.sidebar]
+# primaryColor = "#FF4B4B"
+# backgroundColor = "#F0F2F6"
+# secondaryBackgroundColor = "#FFFFFF"
+# textColor = "#31333F"
+# font = "sans-serif"            # includes native sidebar widget text
+# baseRadius = "0.5rem"
+# showWidgetBorder = true
