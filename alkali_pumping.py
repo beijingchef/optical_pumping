@@ -274,7 +274,7 @@ with st.sidebar:
     # The condition name widget is evaluated before the download payload is
     # serialized, so the JSON always contains the value currently visible here.
     with condition_controls_placeholder.container():
-        load_col, save_col = st.columns([0.38,0.62], gap="small")
+        load_col, save_col, con_name_col = st.columns([0.3,0.2,0.5], gap="small")
 
         with load_col:
             st.file_uploader(
@@ -285,9 +285,9 @@ with st.sidebar:
                 label_visibility="collapsed",
                 on_change=load_condition_callback,
             )
-
         with save_col:
             save_button_placeholder = st.empty()
+        with con_name_col:
             condition_name = st.text_input(
                 "condition name",
                 key="condition_name",
@@ -306,7 +306,7 @@ with st.sidebar:
         condition_json = json.dumps(condition_payload, indent=2)
 
         save_button_placeholder.download_button(
-            "Save condition",
+            "Save",
             data=condition_json,
             file_name=f"{condition_save_name}.json",
             mime="application/json",
