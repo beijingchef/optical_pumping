@@ -8,7 +8,59 @@ from .spectroscopy import (
     complex_voigt_response_relative,
     doppler_fwhm_MHz,
     transition_shift_MHz,
+    voigt_peak_relative_to_natural_line,
 )
+
+
+def optical_rate_scale_from_intensity(
+    atom,
+    line,
+    intensity_uW_cm2,
+    n2_pressure_torr,
+    temperature_C,
+    n2_width_MHz_per_torr,
+):
+    """Convert beam intensity to the common Zeeman excitation-rate scale.
+
+    Multiplying the returned value by ``dipole_strength(...)`` and the
+    line-center-normalized Voigt profile gives the weak-light excitation rate
+    for one Zeeman transition in s^-1.
+    """
+    intensity_uW_cm2 = float(intensity_uW_cm2)
+    if intensity_uW_cm2 < 0.0:
+        raise ValueError("Beam intensity must be nonnegative.")
+
+    c = 299792458.0
+    h = 6.62607015e-34
+    wavelength_m = float(atom[f"lambda_{line}_nm"]) * 1e-9
+    intensity_W_m2 = intensity_uW_cm2 * 1e-2
+    photon_flux_m2_s = intensity_W_m2 * wavelength_m / (h * c)
+
+    # 3 lambda^2 / (2 pi) is the natural-line-center cross section of a
+    # closed cycling transition. The angular strengths in this app are written
+    # relative to the reduced electronic matrix element, hence (2 J_e + 1).
+    cycling_cross_section_m2 = 3.0 * wavelength_m**2 / (2.0 * np.pi)
+    electronic_angular_factor = 2.0 * float(atom[line]["Jp"]) + 1.0
+
+    natural_fwhm_MHz = float(atom[line]["gamma_nat_MHz"])
+    lorentz_fwhm_MHz = (
+        natural_fwhm_MHz
+        + float(n2_width_MHz_per_torr) * float(n2_pressure_torr)
+    )
+    doppler_fwhm = doppler_fwhm_MHz(atom, line, temperature_C)
+    peak_reduction = voigt_peak_relative_to_natural_line(
+        natural_fwhm_MHz,
+        lorentz_fwhm_MHz,
+        doppler_fwhm,
+    )
+
+    return float(
+        photon_flux_m2_s
+        * cycling_cross_section_m2
+        * electronic_angular_factor
+        * peak_reduction
+    )
+
 
 def excited_decay_branching(atom, line, ground_states, e_state):
     """

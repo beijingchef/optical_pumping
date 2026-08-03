@@ -1,7 +1,7 @@
 """Application and model version metadata."""
 
 APP_NAME = "alkali_pumping"
-__version__ = "5.2.14"
+__version__ = "5.2.16"
 DISPLAY_VERSION = "5.2"
 SOURCE_VERSION = "4.23"
 CONDITION_SCHEMA_VERSION = "5.0"

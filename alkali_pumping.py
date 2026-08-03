@@ -84,7 +84,7 @@ with st.sidebar:
 
     st.header("Atom / cell")
     atom_name = st.selectbox("Alkali atom", list(ATOMS.keys()), index=0, key="atom_name")
-    cell_condition_col1, cell_condition_col2 = st.columns(2, gap="small")
+    cell_condition_col1, cell_condition_col2 = st.columns(2, gap="xsmall")
     with cell_condition_col1:
         n2_pressure_torr = st.number_input(
             "N₂ pressure (Torr)",
@@ -114,7 +114,7 @@ with st.sidebar:
 
     se_rate_preview = spin_exchange_rate_info(atom_name, atom, temperature_C)
 
-    cell_row_col1, cell_row_col2 = st.columns(2, gap="small")
+    cell_row_col1, cell_row_col2 = st.columns(2, gap="xsmall")
     with cell_row_col1:
         include_spin_exchange = st.checkbox(
             "Include spin exchange",
@@ -139,7 +139,7 @@ with st.sidebar:
     D1_shift = float(st.session_state["D1_shift"])
     D2_shift = float(st.session_state["D2_shift"])
 
-    axis_col, bias_col = st.columns(2, gap="small")
+    axis_col, bias_col = st.columns(2, gap="xsmall")
     with axis_col:
         q_axis = st.selectbox(
             "Quantization axis",
@@ -179,15 +179,97 @@ with st.sidebar:
     show_allowed_only = st.session_state["show_allowed_only"]
     show_rate_matrices = st.session_state["show_rate_matrices"]
 
-    def beam_config_ui(beam_number, default_line_index=0, default_Fg=None, default_Fe=None, default_rate=10.0):
+    def migrate_legacy_beam_intensity(
+        beam_number,
+        line,
+        transition,
+        det_rel,
+    ):
+        """Convert one loaded rate-referenced v5 condition to intensity."""
+        legacy_inputs = st.session_state.get("_legacy_pump_inputs", {})
+        legacy = legacy_inputs.get(beam_number)
+        if legacy is None:
+            return
+
+        relative_detuning = (
+            0.0
+            if legacy.get("rate_reference") == "At resonance"
+            else det_rel
+        )
+        detuning_MHz, selected_transition = (
+            absolute_detuning_from_transition_choice(
+                atom=atom,
+                line=line,
+                transition_label=transition,
+                relative_detuning_MHz=relative_detuning,
+                n2_pressure_torr=n2_pressure_torr,
+                n2_coeffs=n2_coeffs,
+                allowed_only=show_allowed_only,
+            )
+        )
+
+        k_axis = st.session_state.get(f"k{beam_number}", "z")
+        polarizations = allowed_polarizations(k_axis)
+        pol = st.session_state.get(f"pol{beam_number}", polarizations[0])
+        if pol not in polarizations:
+            pol = polarizations[0]
+
+        ground_states_for_conversion = build_ground_states(atom)
+        rate_scale_per_uW = optical_rate_scale_from_intensity(
+            atom=atom,
+            line=line,
+            intensity_uW_cm2=1.0,
+            n2_pressure_torr=n2_pressure_torr,
+            temperature_C=temperature_C,
+            n2_width_MHz_per_torr=n2_coeffs[line]["width"],
+        )
+        _, conversion_info = build_optical_L(
+            atom=atom,
+            line=line,
+            ground_states=ground_states_for_conversion,
+            detuning_MHz=detuning_MHz,
+            pump_rate_s=rate_scale_per_uW,
+            selected_transition=selected_transition,
+            k_axis=k_axis,
+            pol=pol,
+            q_axis=q_axis,
+            n2_pressure_torr=n2_pressure_torr,
+            temperature_C=temperature_C,
+            n2_width_MHz_per_torr=n2_coeffs[line]["width"],
+            n2_shift_MHz_per_torr=n2_coeffs[line]["shift"],
+            normalize_to_selected_total=False,
+        )
+        selected_indices = np.ix_(
+            conversion_info["reference_ground_indices"],
+            conversion_info["reference_excited_indices"],
+        )
+        selected_rate_per_uW = float(
+            conversion_info["R_ge"][selected_indices].sum()
+        )
+        legacy_rate = max(0.0, float(legacy.get("rate", 0.0)))
+        st.session_state[f"intensity{beam_number}"] = (
+            legacy_rate / selected_rate_per_uW
+            if selected_rate_per_uW > 0.0
+            else 0.0
+        )
+
+        del legacy_inputs[beam_number]
+        if legacy_inputs:
+            st.session_state["_legacy_pump_inputs"] = legacy_inputs
+        else:
+            st.session_state.pop("_legacy_pump_inputs", None)
+
+    def beam_config_ui(
+        beam_number,
+        default_line_index=0,
+        default_Fg=None,
+        default_Fe=None,
+    ):
         st.header(f"Beam {beam_number}")
         det_rel_key = f"det_rel{beam_number}"
-        rate_reference_key = f"rate_reference{beam_number}"
-        rate_key = f"rate{beam_number}"
+        intensity_key = f"intensity{beam_number}"
         if det_rel_key not in st.session_state:
             st.session_state[det_rel_key] = 0.0
-        if rate_key not in st.session_state:
-            st.session_state[rate_key] = float(default_rate)
 
         line = st.selectbox("Reference Line", ["D1", "D2"], index=default_line_index, key=f"line{beam_number}")
 
@@ -214,26 +296,24 @@ with st.sidebar:
             key=det_rel_key,
             help="Laser detuning is defined relative to this pressure-shifted selected hyperfine transition.",
         )
-        rate_reference = st.selectbox(
-            "Pump-rate reference",
-            ["At resonance", "At detuning"],
-            key=rate_reference_key,
-            help=(
-                "Choose whether the entered total rate describes the selected "
-                "transition at the entered detuning or at its resonance center."
-            ),
+        migrate_legacy_beam_intensity(
+            beam_number,
+            line,
+            transition,
+            det_rel,
         )
-        rate = st.number_input(
-            "Pump rate (s⁻¹)",
+        intensity = st.number_input(
+            "Beam intensity (µW/cm²)",
             min_value=0.0,
-            step=10.0,
-            format="%.0f",
-            key=rate_key,
+            step=1.0,
+            format="%g",
+            key=intensity_key,
             help=(
-                "Sum of the selected-transition depopulation rates over all "
-                "ground and excited Zeeman sublevels, using the reference above."
+                "Incident optical intensity used to calculate the absolute "
+                "weak-light pumping rates."
             ),
         )
+        rate_captions_placeholder = st.empty()
         k_axis = st.selectbox(
             "beam direction",
             ["z", "x", "y"],
@@ -249,15 +329,23 @@ with st.sidebar:
             pol_options,
             key=pol_key,
         )
-        return line, transition, det_rel, rate_reference, rate, k_axis, pol
+        return (
+            line,
+            transition,
+            det_rel,
+            intensity,
+            k_axis,
+            pol,
+            rate_captions_placeholder,
+        )
 
-    bcol1, bcol2, bcol3 = st.columns(3, gap="small")
+    bcol1, bcol2, bcol3 = st.columns(3, gap="xsmall")
     with bcol1:
-        line1, transition1, det_rel1, rate_reference1, rate1, k1, pol1 = beam_config_ui(1, default_Fg=1, default_Fe=2)
+        line1, transition1, det_rel1, intensity1, k1, pol1, rate_captions1 = beam_config_ui(1, default_Fg=1, default_Fe=2)
     with bcol2:
-        line2, transition2, det_rel2, rate_reference2, rate2, k2, pol2 = beam_config_ui(2, default_Fg=2, default_Fe=2)
+        line2, transition2, det_rel2, intensity2, k2, pol2, rate_captions2 = beam_config_ui(2, default_Fg=2, default_Fe=2)
     with bcol3:
-        line3, transition3, det_rel3, rate_reference3, rate3, k3, pol3 = beam_config_ui(3, default_Fg=2, default_Fe=2, default_rate=0.0)
+        line3, transition3, det_rel3, intensity3, k3, pol3, rate_captions3 = beam_config_ui(3, default_Fg=2, default_Fe=2)
 
     st.divider()
     st.header("Display")
@@ -274,7 +362,7 @@ with st.sidebar:
     # The condition name widget is evaluated before the download payload is
     # serialized, so the JSON always contains the value currently visible here.
     with condition_controls_placeholder.container():
-        load_col, save_col, con_name_col = st.columns([0.3,0.2,0.5], gap="small")
+        load_col, save_col, con_name_col = st.columns([0.3,0.2,0.5], gap="xsmall")
 
         with load_col:
             st.file_uploader(
@@ -381,8 +469,8 @@ beam_inputs = [
         "selected_transition": selected_transition1,
         "detuning_relative": det_rel1,
         "detuning": det1_abs,
-        "rate": rate1,
-        "rate_reference": rate_reference1,
+        "intensity": intensity1,
+        "rate_captions_placeholder": rate_captions1,
         "k_axis": k1,
         "pol": pol1,
         "q_axis": q_axis,
@@ -394,8 +482,8 @@ beam_inputs = [
         "selected_transition": selected_transition2,
         "detuning_relative": det_rel2,
         "detuning": det2_abs,
-        "rate": rate2,
-        "rate_reference": rate_reference2,
+        "intensity": intensity2,
+        "rate_captions_placeholder": rate_captions2,
         "k_axis": k2,
         "pol": pol2,
         "q_axis": q_axis,
@@ -407,8 +495,8 @@ beam_inputs = [
         "selected_transition": selected_transition3,
         "detuning_relative": det_rel3,
         "detuning": det3_abs,
-        "rate": rate3,
-        "rate_reference": rate_reference3,
+        "intensity": intensity3,
+        "rate_captions_placeholder": rate_captions3,
         "k_axis": k3,
         "pol": pol3,
         "q_axis": q_axis,
@@ -422,29 +510,67 @@ L_total = np.zeros((N, N), dtype=float)
 diagnostics = []
 
 for b in beam_inputs:
-    if b["rate"] > 0:
-        line = b["line"]
+    line = b["line"]
+    rate_scale = optical_rate_scale_from_intensity(
+        atom=atom,
+        line=line,
+        intensity_uW_cm2=b["intensity"],
+        n2_pressure_torr=n2_pressure_torr,
+        temperature_C=temperature_C,
+        n2_width_MHz_per_torr=n2_coeffs[line]["width"],
+    )
+    common_optical_args = {
+        "atom": atom,
+        "line": line,
+        "ground_states": ground_states,
+        "pump_rate_s": rate_scale,
+        "selected_transition": b.get("selected_transition"),
+        "k_axis": b["k_axis"],
+        "pol": b["pol"],
+        "q_axis": q_axis,
+        "n2_pressure_torr": n2_pressure_torr,
+        "temperature_C": temperature_C,
+        "n2_width_MHz_per_torr": n2_coeffs[line]["width"],
+        "n2_shift_MHz_per_torr": n2_coeffs[line]["shift"],
+        "normalize_to_selected_total": False,
+    }
+    Lb, info = build_optical_L(
+        detuning_MHz=b["detuning"],
+        **common_optical_args,
+    )
+    selected_ground_indices = info["reference_ground_indices"]
+    rate_at_detuning = float(
+        info["R_ge"][selected_ground_indices, :].sum()
+    )
 
-        Lb, info = build_optical_L(
-            atom=atom,
-            line=line,
-            ground_states=ground_states,
-            detuning_MHz=b["detuning"],
-            pump_rate_s=b["rate"],
-            selected_transition=b.get("selected_transition"),
-            k_axis=b["k_axis"],
-            pol=b["pol"],
-            q_axis=q_axis,
-            n2_pressure_torr=n2_pressure_torr,
-            temperature_C=temperature_C,
-            n2_width_MHz_per_torr=n2_coeffs[line]["width"],
-            n2_shift_MHz_per_torr=n2_coeffs[line]["shift"],
-            normalize_to_selected_total=True,
-            reference_at_resonance_center=(
-                b["rate_reference"] == "At resonance"
+    if abs(float(b["detuning_relative"])) <= 1e-15:
+        rate_at_resonance = rate_at_detuning
+    else:
+        _, resonance_info = build_optical_L(
+            detuning_MHz=(
+                float(b["detuning"]) - float(b["detuning_relative"])
             ),
+            **common_optical_args,
+        )
+        rate_at_resonance = float(
+            resonance_info["R_ge"][selected_ground_indices, :].sum()
         )
 
+    b["rate"] = rate_at_detuning
+    b["rate_at_resonance"] = rate_at_resonance
+    selected_F = info["reference_Fg"]
+    with b["rate_captions_placeholder"].container():
+        st.caption(
+            f"F={selected_F:g} total pump rate at resonance: "
+            f"{rate_at_resonance:.3g} s⁻¹"
+        )
+        st.caption(
+            f"F={selected_F:g} total pump rate at "
+            f"Δ={float(b['detuning_relative']):g} MHz: "
+            f"{rate_at_detuning:.3g} s⁻¹"
+        )
+
+    if b["intensity"] > 0:
         L_total += Lb
         diagnostics.append((b, info))
 
@@ -1485,19 +1611,19 @@ with st.expander("Model and sign convention"):
 
     st.write("For the zero-RF steady state, M_SE[p] is a nonlinear mean-field collision map. The population solver recomputes the ensemble electron marginal self-consistently, so population feedback is included. The RF plot then calculates adjacent coherences only to first order around that steady state; it does not propagate a finite-RF density matrix or pair correlations.")
 
-    st.write("In the interface, each laser detuning is set relative to a selected pressure-shifted hyperfine transition. The entered total pump rate R_pump is the selected-transition absorption rate summed over all ground and excited Zeeman sublevels:")
+    st.write("In the interface, each laser detuning is set relative to a selected pressure-shifted hyperfine transition, while the entered beam intensity fixes the absolute weak-light excitation scale. The two sidebar captions report the total pump rate out of the selected ground hyperfine manifold, summed over all accessible excited hyperfine and Zeeman states:")
 
     st.latex(
         r"""
-        R_{\mathrm{pump}}
+        R_{\mathrm{pump}}(F_0,\nu_L)
         =
         \sum_{m=-F_0}^{F_0}
-        \sum_{m'=-F'_0}^{F'_0}
-        R_{F_0,m\rightarrow F'_0,m'} .
+        \sum_{F',m'}
+        R_{F_0,m\rightarrow F',m'}(\nu_L) .
         """
     )
 
-    st.write("Here F0 and F0' are the ground and excited hyperfine levels of the selected reference transition. The pump-rate reference selector determines whether this total is evaluated at the entered relative detuning or at the resonance center (Δrel = 0). In the resonance-center mode, R_pump fixes the beam intensity at line center while the optical-pumping dynamics are still evaluated at the entered detuning. Nearby hyperfine transitions remain included after this normalization fixes the optical scale. The relative detuning is")
+    st.write("Here F0 is the ground hyperfine level of the selected reference transition. One caption evaluates the total at that transition's resonance center (Δrel = 0), and the other evaluates it at the specified relative detuning. The optical-pumping dynamics use the latter laser frequency. The relative detuning is")
 
     st.latex(
         r"""

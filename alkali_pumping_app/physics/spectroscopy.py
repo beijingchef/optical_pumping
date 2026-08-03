@@ -83,6 +83,37 @@ def complex_voigt_response_relative(delta_MHz, lorentz_fwhm_MHz, doppler_fwhm_MH
     return complex(float(np.real(response)), float(np.imag(response)))
 
 
+def voigt_peak_relative_to_natural_line(
+    natural_fwhm_MHz,
+    lorentz_fwhm_MHz,
+    doppler_fwhm_MHz_val,
+):
+    """Return the broadened line-center absorption relative to the natural line.
+
+    The Voigt profiles used elsewhere are normalized to one at their own line
+    center. An absolute rate inferred from optical intensity also needs the
+    reduction in peak cross section caused by homogeneous and Doppler
+    broadening. This function returns
+
+        V_broadened(0) / V_natural(0),
+
+    using area-normalized profiles in the same frequency units.
+    """
+    natural_hwhm = max(float(natural_fwhm_MHz) / 2.0, 1e-12)
+    lorentz_hwhm = max(float(lorentz_fwhm_MHz) / 2.0, 1e-12)
+    sigma = float(doppler_fwhm_MHz_val) / (2.0 * sqrt(2.0 * np.log(2.0)))
+
+    if sigma <= 1e-12:
+        return natural_hwhm / lorentz_hwhm
+
+    z0 = 1j * lorentz_hwhm / (sigma * sqrt(2.0))
+    broadened_peak_per_MHz = float(
+        np.real(wofz(z0)) / (sigma * sqrt(2.0 * pi))
+    )
+    natural_peak_per_MHz = 1.0 / (pi * natural_hwhm)
+    return max(0.0, broadened_peak_per_MHz / natural_peak_per_MHz)
+
+
 def voigt_profile_relative(delta_MHz, lorentz_fwhm_MHz, doppler_fwhm_MHz_val):
     """
     Dimensionless Voigt absorption profile normalized to V(0)=1.
@@ -309,4 +340,3 @@ def absolute_detuning_from_transition_choice(
 
     selected = next((row for row in choices if row["label"] == transition_label), choices[0])
     return float(selected["detP"] + relative_detuning_MHz), selected
-

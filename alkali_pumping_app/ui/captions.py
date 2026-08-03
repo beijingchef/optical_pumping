@@ -18,7 +18,7 @@ def input_conditions_caption(
     bias_larmor_hz,
     beam_inputs,
 ):
-    """Return a compact sidebar-input summary, omitting zero-rate beams."""
+    """Return a compact sidebar-input summary, omitting zero-intensity beams."""
     spin_exchange = (
         f"SE=on (R_SE={_number(R_SE)} s⁻¹)"
         if include_spin_exchange
@@ -33,13 +33,14 @@ def input_conditions_caption(
 
     active_beams = []
     for beam in beam_inputs:
-        if float(beam.get("rate", 0.0)) <= 0.0:
+        if float(beam.get("intensity", 0.0)) <= 0.0:
             continue
-        rate_reference = str(beam.get("rate_reference", "")).strip().lower()
         active_beams.append(
             f"{beam['name']}: {beam['line']} {beam['transition_label']}, "
             f"Δ_rel={_number(beam['detuning_relative'])} MHz, "
-            f"R_pump,total={_number(beam['rate'])} s⁻¹ ({rate_reference}), "
+            f"I={_number(beam['intensity'])} µW/cm², "
+            f"R_F,res={_number(beam['rate_at_resonance'])} s⁻¹, "
+            f"R_F,det={_number(beam['rate'])} s⁻¹, "
             f"k={beam['k_axis']}, {beam['pol']}"
         )
 

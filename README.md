@@ -13,8 +13,12 @@ streamlit run alkali_pumping.py
 
 The condition-file schema is version 5.0. Condition files must contain every
 current field; legacy condition-file compatibility is intentionally not provided.
-App/package metadata is versioned as 5.2.14. The condition-file field layout
+App/package metadata is versioned as 5.2.15. The condition-file field layout
 remains schema version 5.0.
+
+Native Streamlit theme settings can be added by uncommenting options in
+`.streamlit/config.toml`. The included template is fully commented and does
+not alter the current appearance.
 
 See `CHANGELOG.md` for user-visible and physics-model updates.
 

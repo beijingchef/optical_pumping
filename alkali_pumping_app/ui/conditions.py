@@ -23,9 +23,9 @@ CONDITION_KEYS = (
     "atom_name", "gamma_ER", "q_axis", "bias_larmor_hz", "temperature_C_for_table", "n2_pressure_torr",
     "include_spin_exchange",
     "D1_width", "D2_width", "D1_shift", "D2_shift",
-    "line1", "transition1", "det_rel1", "rate_reference1", "rate1", "k1", "pol1",
-    "line2", "transition2", "det_rel2", "rate_reference2", "rate2", "k2", "pol2",
-    "line3", "transition3", "det_rel3", "rate_reference3", "rate3", "k3", "pol3",
+    "line1", "transition1", "det_rel1", "intensity1", "k1", "pol1",
+    "line2", "transition2", "det_rel2", "intensity2", "k2", "pol2",
+    "line3", "transition3", "det_rel3", "intensity3", "k3", "pol3",
     *RF_CONDITION_KEYS,
     "show_allowed_only", "show_rate_matrices",
 )
@@ -46,22 +46,19 @@ DEFAULT_STARTUP_CONDITION = {
     "line1": "D1",
     "transition1": "1→2",
     "det_rel1": 0.0,
-    "rate_reference1": "At resonance",
-    "rate1": 1200.0,
+    "intensity1": 7.088770807257407,
     "k1": "x",
     "pol1": "linear z",
     "line2": "D1",
     "transition2": "2→2",
     "det_rel2": 400.0,
-    "rate_reference2": "At resonance",
-    "rate2": 400.0,
+    "intensity2": 2.362923602419136,
     "k2": "x",
     "pol2": "linear z",
     "line3": "D1",
     "transition3": "2→2",
     "det_rel3": 0.0,
-    "rate_reference3": "At resonance",
-    "rate3": 0.0,
+    "intensity3": 0.0,
     "k3": "x",
     "pol3": "linear z",
     "rf_axis": "x",
@@ -146,9 +143,29 @@ def apply_loaded_condition_dict(payload):
     # rf_density_factor was added without changing the v5.0 file schema.
     # Older v5.0 files therefore load with this new display option disabled.
     optional_defaults = {"rf_density_factor": False}
+    legacy_pump_inputs = {}
+    for beam_number in (1, 2, 3):
+        intensity_key = f"intensity{beam_number}"
+        rate_key = f"rate{beam_number}"
+        reference_key = f"rate_reference{beam_number}"
+        if intensity_key not in conditions and rate_key in conditions:
+            legacy_pump_inputs[beam_number] = {
+                "rate": conditions[rate_key],
+                "rate_reference": conditions.get(
+                    reference_key, "At detuning"
+                ),
+            }
+
     missing = [
         key for key in CONDITION_KEYS
-        if key not in conditions and key not in optional_defaults
+        if (
+            key not in conditions
+            and key not in optional_defaults
+            and not (
+                key.startswith("intensity")
+                and int(key.removeprefix("intensity")) in legacy_pump_inputs
+            )
+        )
     ]
     if missing:
         raise ValueError(
@@ -161,9 +178,14 @@ def apply_loaded_condition_dict(payload):
 
     loaded_name = clean_condition_name(loaded_conditions["condition_name"])
     for key in CONDITION_KEYS:
-        value = loaded_conditions[key]
+        value = loaded_conditions.get(key)
         if value is not None:
             st.session_state[key] = value
+
+    if legacy_pump_inputs:
+        st.session_state["_legacy_pump_inputs"] = legacy_pump_inputs
+    else:
+        st.session_state.pop("_legacy_pump_inputs", None)
 
     normalize_rf_frequency_bounds(prefer="lower")
 
