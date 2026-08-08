@@ -219,6 +219,21 @@ SPIN_EXCHANGE_CROSS_SECTION_CM2 = {
     "K39": 2.0e-14,
 }
 
+# Thermal alkali-alkali spin-exchange cross sections used for unlike pairs.
+# Rb85-Rb87: Jarrett, Phys. Rev. 133, A111 (1964), 1.70(21)e-14 cm^2.
+# Rb87-Cs133: Gibbs & Hull, Phys. Rev. 153, 132 (1967), 2.3(2)e-14 cm^2.
+# K-Rb: the approximately 200 A^2 hybrid-vapor value commonly used in SEOP.
+# K-Cs: the approximately 800 a0^2 thermal result of Kartoshkin,
+# Opt. Spectrosc. 113, 235 (2012), converted to 2.24e-14 cm^2.
+CROSS_SPIN_EXCHANGE_CROSS_SECTION_CM2 = {
+    frozenset(("Rb85", "Rb87")): 1.70e-14,
+    frozenset(("Rb85", "Cs133")): 2.30e-14,
+    frozenset(("Rb87", "Cs133")): 2.30e-14,
+    frozenset(("K39", "Rb85")): 2.00e-14,
+    frozenset(("K39", "Rb87")): 2.00e-14,
+    frozenset(("K39", "Cs133")): 2.24e-14,
+}
+
 
 
 def alkali_vapor_pressure_torr(atom_name, temperature_C):
@@ -275,3 +290,76 @@ def spin_exchange_rate_info(atom_name, atom, temperature_C):
         "rate_s": float(rate_s),
     }
 
+
+def mean_relative_speed_cm_s(atom_1, atom_2, temperature_C):
+    """Return the Maxwellian mean relative speed for two alkali species."""
+    T_K = max(float(temperature_C) + 273.15, 1e-9)
+    kB = 1.380649e-23
+    amu = 1.66053906660e-27
+    mass_1 = float(atom_1["mass_amu"]) * amu
+    mass_2 = float(atom_2["mass_amu"]) * amu
+    speed_m_s = sqrt(
+        8.0 * kB * T_K / pi * (1.0 / mass_1 + 1.0 / mass_2)
+    )
+    return float(100.0 * speed_m_s)
+
+
+def cross_spin_exchange_rate_info(
+    atom_name,
+    partner_name,
+    temperature_C,
+    partner_density_cm3,
+):
+    """Return the collision rate experienced by one atom from its partner."""
+    pair = frozenset((atom_name, partner_name))
+    sigma_cm2 = CROSS_SPIN_EXCHANGE_CROSS_SECTION_CM2.get(pair, 2.0e-14)
+    vrel_cm_s = mean_relative_speed_cm_s(
+        ATOMS[atom_name], ATOMS[partner_name], temperature_C
+    )
+    rate_s = max(0.0, float(partner_density_cm3)) * sigma_cm2 * vrel_cm_s
+    return {
+        "pair": tuple(sorted(pair)),
+        "partner_density_cm3": max(0.0, float(partner_density_cm3)),
+        "sigma_cm2": sigma_cm2,
+        "vrel_cm_s": vrel_cm_s,
+        "rate_s": float(rate_s),
+    }
+
+
+def self_spin_exchange_rate_info(
+    atom_name,
+    temperature_C,
+    density_cm3,
+):
+    """Return the self-exchange rate for an explicitly supplied density."""
+    sigma_cm2 = SPIN_EXCHANGE_CROSS_SECTION_CM2.get(atom_name, 2.0e-14)
+    vrel_cm_s = mean_relative_speed_cm_s(
+        ATOMS[atom_name], ATOMS[atom_name], temperature_C
+    )
+    rate_s = max(0.0, float(density_cm3)) * sigma_cm2 * vrel_cm_s
+    return {
+        "density_cm3": max(0.0, float(density_cm3)),
+        "sigma_cm2": sigma_cm2,
+        "vrel_cm_s": vrel_cm_s,
+        "rate_s": float(rate_s),
+    }
+# CODATA-compatible Bohr magneton divided by Planck's constant.  Multiplying
+# by 1e-9 converts a field in nT to a frequency in Hz.
+MU_B_OVER_H_HZ_PER_T = 13.99624555e9
+
+
+def upper_larmor_frequency_from_field_nT(atom_name, field_nT):
+    """Return the upper-ground-manifold Larmor frequency for a field in nT."""
+    atom = ATOMS[atom_name]
+    upper_F = float(atom["I"]) + 0.5
+    g_F = ground_hyperfine_lande_g(atom_name, atom, upper_F)
+    return float(g_F * MU_B_OVER_H_HZ_PER_T * 1e-9 * float(field_nT))
+
+
+def field_nT_from_upper_larmor_frequency(atom_name, frequency_hz):
+    """Convert an upper-ground-manifold Larmor frequency to field in nT."""
+    atom = ATOMS[atom_name]
+    upper_F = float(atom["I"]) + 0.5
+    g_F = ground_hyperfine_lande_g(atom_name, atom, upper_F)
+    scale = g_F * MU_B_OVER_H_HZ_PER_T * 1e-9
+    return float(frequency_hz) / scale if abs(scale) > 0.0 else 0.0

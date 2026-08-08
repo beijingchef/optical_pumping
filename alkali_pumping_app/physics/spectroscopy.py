@@ -208,9 +208,12 @@ def hyperfine_transition_table(
                 detP = det0 + pressure_shift
                 transition_abs_MHz = line_center_MHz + detP
 
-                pump1_abs_MHz = np.nan
-                pump2_abs_MHz = np.nan
-                pump3_abs_MHz = np.nan
+                pump_frequencies = {
+                    "PumpA1": np.nan,
+                    "PumpA2": np.nan,
+                    "PumpB1": np.nan,
+                    "PumpB2": np.nan,
+                }
                 for beam in pump_beams:
                     if beam.get("line") != line:
                         continue
@@ -224,12 +227,9 @@ def hyperfine_transition_table(
                         continue
 
                     pump_abs_MHz = line_center_MHz + float(beam.get("detuning", 0.0))
-                    if beam.get("name") == "Beam 1":
-                        pump1_abs_MHz = pump_abs_MHz
-                    elif beam.get("name") == "Beam 2":
-                        pump2_abs_MHz = pump_abs_MHz
-                    elif beam.get("name") == "Beam 3":
-                        pump3_abs_MHz = pump_abs_MHz
+                    beam_name = beam.get("name")
+                    if beam_name in pump_frequencies:
+                        pump_frequencies[beam_name] = pump_abs_MHz
 
                 rows.append({
                     "Line": line,
@@ -239,9 +239,10 @@ def hyperfine_transition_table(
                     "detuning_zero_pressure": det0,
                     "N2_shift": pressure_shift,
                     "transition_frequency_with_N2": transition_abs_MHz,
-                    "pump_1_frequency": pump1_abs_MHz,
-                    "pump_2_frequency": pump2_abs_MHz,
-                    "pump_3_frequency": pump3_abs_MHz,
+                    "pump_A1_frequency": pump_frequencies["PumpA1"],
+                    "pump_A2_frequency": pump_frequencies["PumpA2"],
+                    "pump_B1_frequency": pump_frequencies["PumpB1"],
+                    "pump_B2_frequency": pump_frequencies["PumpB2"],
                     "lorentz_FWHM_total": total_lorentz,
                     "doppler_FWHM": doppler,
                     "beta_width": n2_coeffs[line]["width"],

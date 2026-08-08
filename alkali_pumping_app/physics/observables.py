@@ -162,21 +162,18 @@ def optical_Lambda_fractional_rates(
 
 
 def add_adjacent_optical_relaxation_columns(df_pop):
-    """Add Gamma^OP and Gamma^OP/(2 pi) for adjacent Zeeman coherences.
+    """Add Gamma^OP for adjacent Zeeman coherences.
 
     For the adjacent coherence rho_{m,m-1}, direct optical depopulation gives
 
         Gamma^OP = (G^OP_m + G^OP_{m-1}) / 2
 
-    in s^-1. The corresponding ordinary-frequency linewidth is
-    Gamma^OP/(2 pi) in Hz. The lowest-m state in each F manifold has no adjacent
-    lower-m partner, so both entries are blank there.
+    in s^-1. The lowest-m state in each F manifold has no adjacent lower-m
+    partner, so its entry is blank.
     """
     df = df_pop.copy()
     rate_column = "Gamma_OP"
-    hz_column = "Gamma_OP_over_2pi"
     df[rate_column] = np.nan
-    df[hz_column] = np.nan
 
     if "G_OP" not in df.columns:
         return df
@@ -192,7 +189,29 @@ def add_adjacent_optical_relaxation_columns(df_pop):
                     row["G_OP"] + rate_by_m[previous_m]
                 )
                 df.loc[row_index, rate_column] = Gamma_OP
-                df.loc[row_index, hz_column] = Gamma_OP / (2.0 * np.pi)
 
     return df
 
+
+def add_total_relaxation_columns(df_pop):
+    """Add total population and adjacent-coherence relaxation rates.
+
+    ``G_total`` is the row-wise sum of the displayed OP, ER, and SE
+    population rates. ``Gamma_total`` is the matching sum of the adjacent
+    coherence relaxation rates, and ``Gamma_total_over_2pi`` expresses that
+    total in Hz. A total remains blank whenever any component is unavailable.
+    """
+    df = df_pop.copy()
+    population_columns = ["G_OP", "G_ER", "G_SE"]
+    coherence_columns = ["Gamma_OP", "Gamma_ER", "Gamma_SE"]
+
+    df["G_total"] = df[population_columns].sum(
+        axis=1,
+        min_count=len(population_columns),
+    )
+    df["Gamma_total"] = df[coherence_columns].sum(
+        axis=1,
+        min_count=len(coherence_columns),
+    )
+    df["Gamma_total_over_2pi"] = df["Gamma_total"] / (2.0 * np.pi)
+    return df
