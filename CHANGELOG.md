@@ -1,5 +1,163 @@
 # Changelog
 
+## 6.1.7 - 2026-08-08
+
+### Fixed
+
+- Restricted each alkali's reported light shift and light-shift diagonality
+  check to pumps targeting that alkali. A nonzero Pump A can no longer blank
+  Alkali B's light-shift columns, and the converse is also true.
+- Preserved off-resonant optical-pumping contributions and all self/cross spin
+  exchange physics; only cross-alkali AC-Stark shifts are neglected.
+- Archived the previous 6.1.6 source without copying the incomplete `.venv`.
+
+## 6.1.6 - 2026-08-08
+
+### Fixed
+
+- Made Alkali A/B result tabs lazy and strictly isolated. The selected tab now
+  contains its own quantization-axis control, population graph, Zeeman table,
+  RF settings, and RF susceptibility plot as one complete result section.
+- Added persistent backing state for all lazy result-tab controls so switching
+  tabs cannot reset or mix A/B quantization and RF configurations.
+- Preserved the selected result tab through quantization-axis and RF-control
+  reruns, including when the selected isotope changes.
+- Archived the previous 6.1.5 source without copying the incomplete `.venv`.
+
+## 6.1.5 - 2026-08-08
+
+### Fixed
+
+- Moved the pending full-rerun check to the end of the pump fragment so an
+  intensity change reliably updates the physical solution and rate caption.
+- Confirmed that, after PumpA1 or PumpA2 reaches zero intensity, direction,
+  polarization, line, transition, and detuning edits remain fragment-only and
+  do not rerun the full physical system.
+- Archived the previous 6.1.4 source without copying the incomplete `.venv`.
+
+## 6.1.4 - 2026-08-08
+
+### Fixed
+
+- Removed the `Calling st.rerun() within a callback is a no-op` warning from
+  pump controls. Callbacks now set a pending full-rerun flag, and the pump
+  fragment consumes that flag before requesting the supported app rerun.
+- Preserved fragment-only reruns for zero-intensity beam settings and full
+  physical recomputation for intensity changes or active-beam edits.
+- Archived the previous 6.1.3 source without copying the incomplete `.venv`.
+
+## 6.1.3 - 2026-08-08
+
+### Fixed
+
+- Kept the selected Alkali A/B result tab active when a quantization-axis or
+  RF control triggers a rerun, so Alkali B controls no longer appear to alter
+  or jump back to Alkali A.
+- Isolated zero-intensity pump configuration edits in a sidebar fragment.
+  Direction, polarization, line, transition, and detuning changes now avoid a
+  full app rerun until that beam has nonzero intensity.
+- Cached physical-system solutions and excluded zero-intensity beams from the
+  solver input, while retaining their stored UI configuration.
+- Archived the previous 6.1.2 source without copying the incomplete `.venv`.
+
+## 6.1.2 - 2026-08-08
+
+### Fixed
+
+- Preserved every Alkali A and Alkali B pump setting when switching between
+  the lazy pump-configuration tabs. Visible widget values are now copied into
+  persistent condition state instead of being lost during hidden-widget
+  cleanup.
+- Kept condition-file loading and saving connected to the persistent pump
+  settings while using separate temporary keys for visible tab controls.
+- Archived the previous 6.1.1 application before applying this update.
+
+## 6.1.1 - 2026-08-08
+
+### Fixed
+
+- Kept the Alkali A and Alkali B pump configurations in persistent keyed tabs
+  when a pump transition or another tab-local setting triggers a rerun.
+- Rendered only the open pump tab so the two pump configurations cannot appear
+  stacked in the sidebar after a rerun.
+
+### Changed
+
+- Moved the `n(B) / n(A)` input onto the same sidebar row as the mixture density
+  model selector.
+- Archived the previous 6.1.0 application before applying this update.
+
+## 6.1.0 - 2026-08-08
+
+### Added
+
+- Added a shared static-field direction and signed field strength in nT.
+- Added independent Alkali A and Alkali B quantization-axis controls above
+  their population and Zeeman-result regions.
+- Added independent RF-A and RF-B axes, observables, frequency ranges, curve
+  selections, and normalization settings beside their susceptibility plots.
+- Added a coupled coherence-response generator. Each result applies only its
+  own RF drive while retaining self- and cross-species spin-exchange feedback.
+- Added automatic v6.0 condition migration, including conversion of the old
+  A upper-manifold Larmor frequency to static-field strength.
+
+### Changed
+
+- Moved all RF-response controls out of the sidebar and to the left of the
+  corresponding Alkali A or Alkali B susceptibility plot.
+- Archived the pre-update application in `archive/alkali_pumping_v6.0.0`.
+
+## 6.0.0 - 2026-08-07
+
+### Added
+
+- Added optional **Alkali B** selection beside **Alkali A**. `None` is the
+  default, and a B selection identical to A is intentionally inactive.
+- Added independent saturated-vapor and relative-concentration density modes.
+- Added persistent sidebar pump tabs with PumpA1, PumpA2, PumpB1, and PumpB2.
+- Added coupled unlike-alkali spin exchange, including two-species fixed-point
+  populations and the full block small-signal population Jacobian.
+- Added separate Alkali A and Alkali B result tabs when B is active.
+- Added self- and cross-spin-exchange contributions to the Zeeman table.
+- Added v5.0 condition migration to the v6.0 condition schema.
+
+### Changed
+
+- Retired the third A pump. PumpA1 and PumpA2 default to 5.0 µW/cm²; PumpB1
+  and PumpB2 default to 0.0 µW/cm².
+- Every active pump is evaluated at its absolute optical frequency for both
+  species, including isotope cross-pumping.
+- Rate-matrix output now includes the coupled A/B Jacobian and its local maps.
+- Archived the pre-upgrade application in `archive/alkali_pumping_v5.2.16`.
+
+## 5.2.16 - 2026-07-23
+
+### Added
+
+- Added a beam-intensity input in µW/cm² for each of the three pump beams.
+- Added calculated sidebar captions for the selected ground manifold's total
+  pump rate at the reference resonance and at the specified detuning.
+- Added automatic conversion of legacy v5 rate-referenced condition files to
+  the equivalent physical beam intensities.
+
+### Changed
+
+- Replaced the pump-rate reference selector and pump-rate input with an
+  absolute weak-light rate calculation based on photon flux, D-line
+  wavelength, natural linewidth, and pressure/Doppler broadening.
+
+## 5.2.15 - 2026-07-21
+
+### Added
+
+- Added a fully commented `.streamlit/config.toml` template for future native
+  Streamlit theme, font, color, border, and sidebar customization.
+
+### Changed
+
+- Documented the theme configuration file in the README.
+- Archived the pre-update application in `archive/alkali_pumping_v5.2.14`.
+
 ## 5.2.14 - 2026-07-21
 
 ### Changed
